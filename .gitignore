@@ -1,0 +1,8 @@
+.superpowers/
+.codex_tmp/
+.vs/
+**/bin/
+**/obj/
+TestResults/
+*.user
+*.suo

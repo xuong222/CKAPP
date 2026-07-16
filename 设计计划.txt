@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1 已完成并通过双重审查；下一步执行 Task 2
+implementation_status = Task 1～2 已完成并通过双重审查；下一步执行 Task 3
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -957,7 +957,7 @@ Run: `git commit -m "build: establish locked .NET 8 solution baseline"`
 - Create: `tests\CH32UpperComputer.Core.Tests\Protocol\ModbusCrc16Tests.cs`
 - Create: `tests\CH32UpperComputer.Core.Tests\Protocol\HexFrameParserTests.cs`
 
-- [ ] **Step 1: 写 CRC 失败测试**
+- [x] **Step 1: 写 CRC 失败测试**
 
 ```csharp
 [Test]
@@ -968,37 +968,41 @@ public void Compute_KnownReadRequest_ReturnsExpectedCrc()
 }
 ```
 
-- [ ] **Step 2: 运行并确认因类型不存在而失败**
+- [x] **Step 2: 运行并确认因类型不存在而失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~ModbusCrc16Tests`
 Expected: FAIL，`ModbusCrc16` 未定义。
 
-- [ ] **Step 3: 实现 CRC 最小闭环**
+- [x] **Step 3: 实现 CRC 最小闭环**
 
 实现 `Compute(ReadOnlySpan<byte>)`、`Append(ReadOnlySpan<byte>)`、`IsValid(ReadOnlySpan<byte>)`；初值 0xFFFF、多项式 0xA001、低字节先追加。所有公开函数和参数写中文 XML 注释，Allman 风格。
 
-- [ ] **Step 4: 写十六进制解析失败测试**
+- [x] **Step 4: 写十六进制解析失败测试**
 
 覆盖大小写、空格/Tab/换行/短横线、奇数位、非法字符、空输入和超过 256 字节；结果使用明确的成功/错误模型，不以异常承担普通输入校验。
 
-- [ ] **Step 5: 运行并确认十六进制解析行为失败**
+- [x] **Step 5: 运行并确认十六进制解析行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~HexFrameParserTests`
 Expected: FAIL，HexFrameParser 未定义。
 
-- [ ] **Step 6: 实现解析、格式化和自动 CRC 检测**
+- [x] **Step 6: 实现解析、格式化和自动 CRC 检测**
 
 `TryParse(string, int maxBytes)` 返回不可变结果；`Format(ReadOnlySpan<byte>)` 输出大写两位十六进制并以空格分隔；提供“输入似乎已含有效 CRC”的判断。
 
-- [ ] **Step 7: 运行目标与完整测试**
+- [x] **Step 7: 运行目标与完整测试**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests`
 Expected: PASS，0 failed。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 Run: `git add src\CH32UpperComputer.Core\Protocol tests\CH32UpperComputer.Core.Tests\Protocol`
 Run: `git commit -m "feat(core): add Modbus CRC and hex parsing"`
+
+**Execution Record (2026-07-16):** CRC 与 Hex 类型缺失 RED 均已观察；功能提交 `78f9140`。
+质量审查发现 ReadOnlyMemory 可反取内部数组后，先以 MemoryMarshal 回归测试复现 RED，再由 `e4a4e96`
+改为防御性快照；Core 15/15、Debug build 0 warning/0 error、format verify 退出 0。规格与复审质量均通过。
 
 ### Task 3: Modbus 请求构建与响应解析（TDD）
 

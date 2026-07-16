@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = 尚未开始；下一步严格从 Implementation Plan Task 1 执行
+implementation_status = Task 1 已完成并通过双重审查；下一步执行 Task 2
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -880,7 +880,7 @@ App 项目（`src\CH32UpperComputer.App`）：
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\CH32UpperComputer.Infrastructure.Tests.csproj`
 - Create: `tests\CH32UpperComputer.App.Tests\CH32UpperComputer.App.Tests.csproj`
 
-- [ ] **Step 1: 写入 SDK 和中央属性文件**
+- [x] **Step 1: 写入 SDK 和中央属性文件**
 
 `global.json` 必须锁定 `8.0.417`；`Directory.Build.props` 至少包含：
 
@@ -896,7 +896,7 @@ App 项目（`src\CH32UpperComputer.App`）：
 </Project>
 ```
 
-- [ ] **Step 2: 写入固定包版本**
+- [x] **Step 2: 写入固定包版本**
 
 `Directory.Packages.props` 必须开启 `ManagePackageVersionsCentrally` 并逐项写入：
 
@@ -908,7 +908,7 @@ App 项目（`src\CH32UpperComputer.App`）：
 <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
 ```
 
-- [ ] **Step 3: 创建项目并建立依赖方向**
+- [x] **Step 3: 创建项目并建立依赖方向**
 
 Run individually:
 `dotnet new sln -n CH32UpperComputer`
@@ -922,11 +922,11 @@ Run individually:
 
 Expected: 七个项目成功生成且不触发模板还原；App 为 `net8.0-windows` 且 `UseWPF=true`。
 
-- [ ] **Step 4: 把项目加入解决方案并整理引用**
+- [x] **Step 4: 把项目加入解决方案并整理引用**
 
 先分别执行 `dotnet sln CH32UpperComputer.sln add <项目 csproj 路径>`，将七个项目全部加入解决方案。删除模板 Class1/UnitTest；Core 不引用其他项目；Infrastructure 引用 Core 和 System.IO.Ports；App 引用 Core、Infrastructure 和 CommunityToolkit.Mvvm；Testing 明确引用 Core 与 Infrastructure，供 FakeSerialTransport/SimulatedModbusDevice 实现接口和协议；三个测试项目引用被测项目、Testing、NUnit、Adapter、Test SDK，删除模板自带的 coverlet 和所有内联 Version。App.Tests 的 TargetFramework 改为 `net8.0-windows` 以引用 WPF App；Adapter 设置 `PrivateAssets=all`。`.gitignore` 保留 `.superpowers/`，并加入 `bin/`、`obj/`、`.vs/` 和非最终中间产物。
 
-- [ ] **Step 5: 生成锁文件并验证空基线**
+- [x] **Step 5: 生成锁文件并验证空基线**
 
 Run: `dotnet restore --use-lock-file`
 Expected: 每个含包引用的项目生成 `packages.lock.json`。
@@ -940,10 +940,14 @@ Expected: 0 errors。
 Run: `dotnet test --no-build`
 Expected: 测试主机启动成功，0 failed。
 
-- [ ] **Step 6: 提交工程基线**
+- [x] **Step 6: 提交工程基线**
 
 Run: `git add global.json Directory.Build.props Directory.Packages.props .editorconfig .gitignore CH32UpperComputer.sln src tests`
 Run: `git commit -m "build: establish locked .NET 8 solution baseline"`
+
+**Execution Record (2026-07-16):** `dotnet restore --use-lock-file`、`dotnet restore --locked-mode`、
+`dotnet build -c Debug` 和 `dotnet test --no-build` 均退出 0；构建 0 warning/0 error，三个空 NUnit
+测试宿主 0 failed。实现提交 `30795ae`；规格审查通过；质量审查无 Critical/Important/Minor 问题。
 
 ### Task 2: CRC16 与十六进制输入（TDD）
 

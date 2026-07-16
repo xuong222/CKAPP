@@ -66,7 +66,7 @@
 
             if (request.IsUnknownAddressQuery)
             {
-                return ParseUnknownAddressResponse(frame);
+                return ParseUnknownAddressResponse(request, frame);
             }
 
             if (frame[0] != request.SlaveAddress)
@@ -161,6 +161,7 @@
             }
 
             return ModbusResponse.CreateSuccess(
+                request,
                 frame[0],
                 frame,
                 registers);
@@ -197,6 +198,7 @@
             }
 
             return ModbusResponse.CreateSuccess(
+                request,
                 frame[0],
                 frame,
                 ReadOnlySpan<ushort>.Empty);
@@ -231,6 +233,7 @@
             }
 
             return ModbusResponse.CreateSuccess(
+                request,
                 frame[0],
                 frame,
                 ReadOnlySpan<ushort>.Empty);
@@ -239,9 +242,12 @@
         /// <summary>
         /// 验证 0xFE 查询的专用响应地址、功能、单寄存器结构和地址值一致性。
         /// </summary>
+        /// <param name="request">实际参与响应签名验证的固定 0xFE 查询请求对象。</param>
         /// <param name="frame">CRC 已经通过校验的未知地址查询响应候选。</param>
         /// <returns>只在真实地址 1 至 64 且寄存器值等于该地址时返回发现成功。</returns>
-        private static ModbusResponse ParseUnknownAddressResponse(ReadOnlySpan<byte> frame)
+        private static ModbusResponse ParseUnknownAddressResponse(
+            ModbusRequest request,
+            ReadOnlySpan<byte> frame)
         {
             const int expectedResponseLength = 7;
             const int expectedByteCount = 2;
@@ -280,6 +286,7 @@
             registers[0] = returnedAddressValue;
 
             return ModbusResponse.CreateSuccess(
+                request,
                 frame[0],
                 frame,
                 registers,

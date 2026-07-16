@@ -43,6 +43,7 @@
         /// <param name="slaveAddress">候选响应中的从站地址；空帧协议错误时为 <see langword="null"/>。</param>
         /// <param name="rawFrame">调用方提供的完整响应候选帧。</param>
         /// <param name="registers">成功读响应解码出的连续寄存器字。</param>
+        /// <param name="matchedRequest">仅成功响应保留的、实际参与完整签名校验的请求对象；其他分类为 <see langword="null"/>。</param>
         /// <param name="exceptionCode">标准异常响应码；其他分类为 <see langword="null"/>。</param>
         /// <param name="exceptionMeaning">异常码的中文含义；其他分类为 <see langword="null"/>。</param>
         /// <param name="discoveredSlaveAddress">0xFE 专用匹配发现的真实地址；其他分类为 <see langword="null"/>。</param>
@@ -52,6 +53,7 @@
             byte? slaveAddress,
             ReadOnlySpan<byte> rawFrame,
             ReadOnlySpan<ushort> registers,
+            ModbusRequest? matchedRequest,
             byte? exceptionCode,
             string? exceptionMeaning,
             byte? discoveredSlaveAddress,
@@ -61,6 +63,7 @@
             SlaveAddress = slaveAddress;
             this.rawFrame = rawFrame.ToArray();
             this.registers = registers.ToArray();
+            MatchedRequest = matchedRequest;
             ExceptionCode = exceptionCode;
             ExceptionMeaning = exceptionMeaning;
             DiscoveredSlaveAddress = discoveredSlaveAddress;
@@ -94,6 +97,12 @@
         public ReadOnlyMemory<ushort> Registers => (ushort[])registers.Clone();
 
         /// <summary>
+        /// 获取实际参与成功响应解析的请求对象；异常和协议错误结果为空。
+        /// 此关联供同一核心程序集内的状态模型阻止成功响应脱离其解析上下文后被错误套用。
+        /// </summary>
+        internal ModbusRequest? MatchedRequest { get; }
+
+        /// <summary>
         /// 获取标准 Modbus 异常码；正常响应或协议错误时为 <see langword="null"/>。
         /// </summary>
         public byte? ExceptionCode { get; }
@@ -116,22 +125,27 @@
         /// <summary>
         /// 创建已经完整匹配正常响应签名的成功结果。
         /// </summary>
+        /// <param name="matchedRequest">实际参与当前响应签名验证的不可变请求对象。</param>
         /// <param name="slaveAddress">响应实际使用的从站地址。</param>
         /// <param name="rawFrame">CRC 和签名均有效的完整响应帧。</param>
         /// <param name="registers">0x03 响应解码寄存器字；写响应传入空序列。</param>
         /// <param name="discoveredSlaveAddress">0xFE 查询发现的真实地址；普通请求传入 <see langword="null"/>。</param>
         /// <returns>不包含错误或异常信息的成功响应。</returns>
         internal static ModbusResponse CreateSuccess(
+            ModbusRequest matchedRequest,
             byte slaveAddress,
             ReadOnlySpan<byte> rawFrame,
             ReadOnlySpan<ushort> registers,
             byte? discoveredSlaveAddress = null)
         {
+            ArgumentNullException.ThrowIfNull(matchedRequest);
+
             return new ModbusResponse(
                 ModbusResponseStatus.Succeeded,
                 slaveAddress,
                 rawFrame,
                 registers,
+                matchedRequest,
                 null,
                 null,
                 discoveredSlaveAddress,
@@ -157,6 +171,7 @@
                 slaveAddress,
                 rawFrame,
                 ReadOnlySpan<ushort>.Empty,
+                null,
                 exceptionCode,
                 exceptionMeaning,
                 null,
@@ -180,6 +195,7 @@
                 slaveAddress,
                 rawFrame,
                 ReadOnlySpan<ushort>.Empty,
+                null,
                 null,
                 null,
                 null,

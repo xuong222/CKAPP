@@ -144,12 +144,41 @@ Failed(Timeout) -> Resynchronizing -> ConnectedIdle（获得完整静默窗口�
 6. 每个响应候选同时记录 PortGeneration、ReceiveSequence 和单调时钟到达时间；只有当前端口代次、
    当前事务发送之后、事务截止时间之前到达并通过签名校验的候选才可进入成功路径。
 7. 超时后事务进入 Resynchronizing，停止定时发送且不得自动重试；事务协调器执行第 3.5 节的迟到响应隔离。
-8. 手动指令可在定时模式下优先插队；手动事务完成后，定时计划继续，但定时任务不得积压。
+8. 协调器不维护请求等待队列。存在活动事务时，新的手动指令、常用指令、参数写入、专用配置事务和
+   定时请求均立即返回 Busy；相同请求也不合并、不排队，避免断线期间积累过期指令。
 9. 定时发送使用纯 fixed-delay：只有本次事务完成后才开始等待一个完整设定间隔，间隔结束后发起下一次；
    事务执行期间不存在周期 tick、待合并触发或补发队列，因此任何时刻最多只有一个定时发送流程。
-10. 停止定时发送时递增 ScheduleGeneration 并取消令牌；入队前和真正写串口前都必须复核代次，
-    从而覆盖“下一次任务恰好准备入队”的竞态。已开始的单次事务允许完成，但不得再安排下一次。
+10. 停止定时发送时递增 ScheduleGeneration 并取消令牌；尝试占用协调器前和真正写串口前都必须复核代次，
+    从而覆盖“下一次任务恰好准备提交”的竞态。已开始的单次事务允许完成，但不得再安排下一次。
 11. 断开串口时递增 PortGeneration，取消等待中的事务与定时计划，并释放串口句柄。
+
+3.3.1 原子完成门
+
+1. 每个事务内部保存 int completionState，初值为 TransactionCompletionState.Pending；枚举至少包含
+   Pending、Succeeded、ModbusException、TimedOut、Cancelled、Disconnected、ReceiveOverflow、ApplicationStopping。
+2. 正常响应、Modbus 异常响应、响应超时、用户取消、串口断开、接收缓存溢出和应用退出全部调用同一个
+   TryComplete(TransactionCompletionState newState, TransactionOutcome outcome) 入口。
+3. TryComplete 使用以下等价原子门；completionState 必须是 int，避免对枚举误用不适用的重载：
+   Interlocked.CompareExchange(ref completionState, (int)newState, (int)TransactionCompletionState.Pending)。
+4. 只有观察到旧值为 Pending 的第一个事件是胜者。胜者才可完成使用
+   TaskCreationOptions.RunContinuationsAsynchronously 创建的 TaskCompletionSource<TransactionOutcome>，
+   并发布一次最终事务结果和一次 UI 状态更新。
+5. 竞争失败的事件只记录 TransactionId、候选终态、已胜出终态和到达时间；不得再次完成任务、更新该事务的
+   数据卡/错误提示、释放活动事务门或执行事务级清理。若失败方来自真实串口断开或应用退出，连接所有者仍须
+   以独立且幂等的连接生命周期入口更新全局连接状态和释放物理端口，但不得反向覆盖已胜出的事务结果。
+6. 接收、超时、断开等回调不得直接释放事务互斥门。事务所有者在等待唯一完成结果后，于 finally 中恰好
+   释放一次活动事务门；串口生命周期资源由连接所有者恰好清理一次，避免重复释放和关闭竞态。
+
+3.3.2 请求背压与 UI 忙状态
+
+1. 协调器使用原子活动标志实现 TryBeginTransaction；只允许 Idle -> Busy 的一次成功转换，不创建
+   ConcurrentQueue、Channel 或其他请求积压容器。
+2. Busy 期间的所有新请求立即返回 TransactionRejected.Busy，且不得分配新的 TransactionId、写串口或
+   改变当前事务。UI 提示：“当前已有请求等待处理，请完成或取消后再试。”
+3. 发送按钮、常用指令按钮、参数下发按钮和特殊配置按钮统一绑定 IsTransactionBusy；Busy 时命令
+   CanExecute=false 并显示进行中状态。即使快速双击在 UI 状态刷新前穿透，协调器原子门仍必须拒绝第二次。
+4. 定时发送到期时若协调器 Busy，不排队、不追赶；记录一次 Busy 诊断后等待一个完整定时间隔再尝试。
+5. 事务完成或取消后，先完成原子终态和资源清理，再把 IsTransactionBusy 复位并通知命令重新计算 CanExecute。
 
 3.4 接收组帧、缓存与多帧拆分
 
@@ -381,7 +410,21 @@ RAW_INTER_BYTE_TIMEOUT_MS 作为捕获结束条件。
 6. 软件架构与线程模型
 -------------------------------------------------------------------------------
 
-6.1 解决方案结构
+6.1 工程基线与固定依赖
+
+1. 目标框架固定为 net8.0-windows，语言版本固定为 C# 12，启用 Nullable 和 ImplicitUsings。
+2. 串口包固定为 System.IO.Ports 8.0.0；本项目周期内不得升级到 9.x/10.x。
+3. MVVM 固定使用 CommunityToolkit.Mvvm 8.4.2，ViewModel 统一继承 ObservableObject，
+   命令统一使用 RelayCommand/AsyncRelayCommand；不再并用自制 ICommand、Prism 或 ReactiveUI。
+4. 测试框架固定使用 NUnit 4.6.1；测试适配器固定为 NUnit3TestAdapter 6.2.0，
+   测试宿主固定为 Microsoft.NET.Test.Sdk 18.8.1；不混用 xUnit、MSTest 或其他断言框架。
+5. 根目录 Directory.Build.props 统一 C# 版本、Nullable、ImplicitUsings 和 RestorePackagesWithLockFile；
+   所有 NuGet 版本集中写入 Directory.Packages.props 并启用 Central Package Management。各项目生成并提交
+   packages.lock.json，Release/CI 恢复使用 locked-mode，防止隐式漂移。
+6. 上述框架和主版本在开发中途不得更换；如遇安全漏洞或阻断构建的问题，必须先在本文件记录原因、
+   兼容性影响和迁移测试，再单独升级，禁止边开发边替换 MVVM 或测试框架。
+
+6.2 解决方案结构
 
 D:\CH32\SHANGWEJI\CH32UpperComputer.sln
 
@@ -389,7 +432,7 @@ src\CH32UpperComputer.Core
   责任：纯协议、寄存器模型、值转换、输入校验；不得依赖 WPF 和真实串口。
 
 src\CH32UpperComputer.Infrastructure
-  责任：串口、事务队列、定时发送、设置存储、日志导出。
+  责任：串口、无队列事务协调与忙时背压、定时发送、设置存储、日志导出。
 
 src\CH32UpperComputer.App
   责任：WPF Views、ViewModels、资源样式、命令与 UI 状态。
@@ -401,6 +444,9 @@ tests\CH32UpperComputer.Infrastructure.Tests
   责任：FakeSerialTransport、SimulatedModbusDevice、组帧、粘包/分段、事务串行化、
   超时、迟到响应、取消、断开和定时发送状态机。
 
+tests\CH32UpperComputer.App.Tests
+  责任：ViewModel、CommunityToolkit.Mvvm 命令、忙状态、重复点击背压和批量 UI 投递。
+
 tests\CH32UpperComputer.Testing
   责任：可复用测试工具；不得被生产项目引用。
 
@@ -408,7 +454,7 @@ docs\使用说明.md
 docs\寄存器说明.md
 scripts\publish-win-x64.ps1
 
-6.2 依赖方向
+6.3 依赖方向
 
 App -> Infrastructure -> Core
 App -> Core
@@ -417,7 +463,7 @@ Tests -> 被测项目
 
 禁止反向依赖；Core 不得引用 PresentationFramework、System.IO.Ports 或具体文件系统实现。
 
-6.3 关键组件
+6.4 关键组件
 
 1. ModbusCrc16：CRC 计算与验证。
 2. ModbusRequestFactory：构建 0x03/0x06/0x10/0xFE 请求。
@@ -426,7 +472,13 @@ Tests -> 被测项目
 5. DeviceSnapshot：保存最后一次有效寄存器缓存和更新时间。
 6. ISerialTransport：定义打开、关闭、写入、后台接收数据块、连接状态和 PortGeneration；
    不暴露 System.IO.Ports.SerialPort，供协调器和测试注入使用。
-7. SerialPortTransport：ISerialTransport 的生产实现；维护单一后台读取循环，输出字节块和单调到达时间。
+7. SerialPortTransport：ISerialTransport 的生产实现。接收路径只允许一个
+   SerialPort.BaseStream.ReadAsync(Memory<byte>, CancellationToken) 后台循环，使用固定大小缓冲块输出数据和
+   单调到达时间；禁止订阅 SerialPort.DataReceived，禁止轮询 BytesToRead，禁止再调用 SerialPort.Read/ReadByte。
+   打开成功后只启动一个读取循环；关闭时先原子标记 Closing 并递增 PortGeneration，再取消读取令牌，
+   随后 Close/Dispose SerialPort 以解除可能仍挂起的 ReadAsync，最后等待读取循环退出。上一循环未退出前不得重开。
+   关闭过程中预期的 OperationCanceledException、ObjectDisposedException 和 IOException 只记诊断；
+   非关闭过程的读取异常必须报告断线。读取循环逻辑应可用受控 Stream 测试，且不得逐字节发布 UI 事件。
 8. RtuReceiveFramer：实现结构长度、静默、CRC 边界、多帧拆分、缓存上限和溢出恢复。
 9. ModbusTransactionCoordinator：只依赖 ISerialTransport 和 TimeProvider；分配 TransactionId，
    确保请求串行化，管理签名匹配、总超时、取消、迟到响应隔离和特殊配置事务。
@@ -441,7 +493,7 @@ Tests -> 被测项目
 15. CommunicationLogService：维护 5000 条数据日志和 750 条实时视图投影，并导出 UTF-8 文本。
 16. MainWindowViewModel：导航、连接状态和跨页面共享状态。
 
-6.4 线程规则
+6.5 线程规则
 
 1. 串口读取、超时等待、文件导出不得阻塞 WPF UI 线程。
 2. ViewModel 批量更新 ObservableCollection 或绑定属性时切回 Dispatcher；单字节接收不得直接更新 UI。
@@ -453,6 +505,10 @@ Tests -> 被测项目
    测试使用 ManualTimeProvider。业务代码禁止直接读取 DateTime.Now，也禁止使用不可控的 Task.Delay。
 7. 日志导出使用不可变快照在线程池执行；导出失败不得影响串口接收循环。
 8. 不使用 Thread.Abort，不使用无限阻塞 Read，不吞掉后台异常。
+9. SerialPortTransport 的接收源只能是单一 BaseStream.ReadAsync 循环；DataReceived、BytesToRead 轮询和
+   SerialPort.Read 系列 API 在生产接收路径中均禁止使用，避免重复读取与关闭竞态。
+10. 所有 ViewModel 和异步命令使用 CommunityToolkit.Mvvm；事务忙状态变化统一触发相关命令的
+    NotifyCanExecuteChanged，不在代码隐藏中另建第二套忙状态。
 
 -------------------------------------------------------------------------------
 7. 异常处理与用户反馈
@@ -526,10 +582,11 @@ Tests -> 被测项目
 1. 连接后不自动写出任何字节。
 2. 手动发送产生一次事务。
 3. 定时发送只有手动启动后才产生事务。
-4. 停止定时发送时，下一次任务恰好准备入队：代次检查阻止入队或写出，队列不积压。
+4. 停止定时发送时，下一次任务恰好准备提交：代次检查阻止占用协调器或写出，不产生待处理请求。
 5. 纯固定延迟定时发送在单次响应慢于设定间隔时，不产生并发 tick、跳过计数或追赶补发；
    事务完成后必须再等待一个完整间隔才发送下一次。
-6. 手动请求和定时请求同时触发：手动优先，串口无并发写，定时计划随后恢复。
+6. 手动请求和定时请求同时触发：原子活动门只允许一个胜出，另一方立即 Busy；串口无并发写、无请求队列；
+   若定时请求被拒绝，必须等待一个完整间隔后才可再尝试。
 7. 串口在等待响应时被拔出：事务取消、锁释放、定时停止、UI 状态断开。
 8. 响应恰好在总超时边界前/后到达：只能有一个确定终态，不双重完成。
 9. 请求 A 超时后迟到响应到达：迟到帧进入隔离日志，不得完成请求 B。
@@ -550,16 +607,26 @@ Tests -> 被测项目
 21. 日志数据缓存 5000 条、实时视图 750 条分别裁剪；批量 UI 更新不逐字节调度。
 22. 日志筛选正确，UTF-8 导出中文无乱码，导出不阻塞通信事务。
 23. 配置缺失、合法、损坏三种加载路径。
+24. 正常响应、Modbus 异常、超时、用户取消、串口断开、接收溢出和应用退出均只能经 TryComplete
+    进入最终状态；每个事件单独覆盖，并至少覆盖响应/超时、取消/响应、断开/超时三组边界竞态。
+25. 两个完成事件竞争时只有一个改变 completionState 和完成 TaskCompletionSource；失败方只产生日志，
+    不重复更新事务结果 UI、不重复释放活动门、不覆盖胜出错误信息；真实断开即使未赢得事务终态，
+    连接生命周期仍恰好清理一次并把全局连接状态设为断开。
+26. 快速重复点击相同或不同指令：第一项活动期间其余请求全部 Busy，不分配 TransactionId、不写串口、
+    不建立 ConcurrentQueue；ViewModel 发送类命令在 Busy 时 CanExecute=false，空闲后恢复。
+27. 可控 Stream 把一帧拆成多次 ReadAsync、一次返回多帧、挂起时取消、挂起时关闭和异常断线；
+    每个字节只能由单一读取循环交付一次，关闭后循环在限定时间内退出，上一循环退出前不能重开。
 
 9.4 构建与人工验收
 
-1. dotnet test：全部测试 0 失败。
-2. dotnet build -c Release：0 错误；项目自有代码尽量 0 警告。
-3. dotnet publish win-x64：生成单文件 EXE。
-4. 启动烟雾测试：EXE 启动后主窗口可见且无未处理异常。
-5. UI 截图检查：第五版布局、卡片比例、标题字号、报警栏、细上边界、单列常用指令。
-6. 中文检查：窗口标题、数据卡片、错误提示、配置和导出日志无乱码。
-7. 硬件验收（需要真实设备）：03 读取、06 写入、10 批量写、FE 查询、地址/波特率切换。
+1. dotnet restore --locked-mode：所有项目严格按已提交 packages.lock.json 恢复，无版本漂移。
+2. dotnet test：全部测试 0 失败。
+3. dotnet build -c Release：0 错误；项目自有代码尽量 0 警告。
+4. dotnet publish win-x64：生成单文件 EXE。
+5. 启动烟雾测试：EXE 启动后主窗口可见且无未处理异常。
+6. UI 截图检查：第五版布局、卡片比例、标题字号、报警栏、细上边界、单列常用指令。
+7. 中文检查：窗口标题、数据卡片、错误提示、配置和导出日志无乱码。
+8. 硬件验收（需要真实设备）：03 读取、06 写入、10 批量写、FE 查询、地址/波特率切换。
 
 发布项目参数固定为：
 - TargetFramework = net8.0-windows
@@ -583,7 +650,10 @@ dotnet publish src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Release
 -------------------------------------------------------------------------------
 
 阶段 0：工程基线
-- 创建解决方案、项目、统一编译规则、测试框架和 Git 忽略规则。
+- 创建解决方案、Core/Infrastructure/App/Testing 与三套 NUnit 测试项目、统一编译规则和 Git 忽略规则。
+- 创建 Directory.Build.props 和 Directory.Packages.props，并锁定 System.IO.Ports 8.0.0、
+  CommunityToolkit.Mvvm 8.4.2、NUnit 4.6.1、NUnit3TestAdapter 6.2.0、Microsoft.NET.Test.Sdk 18.8.1；
+  为各项目生成并提交 packages.lock.json。
 - 验证空工程 Debug/Release 构建及测试运行。
 
 阶段 1：协议核心（TDD）
@@ -600,16 +670,19 @@ dotnet publish src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Release
 
 阶段 3：通信基础设施（TDD）
 - ISerialTransport、SerialPortTransport、FakeSerialTransport 和 SimulatedModbusDevice。
-- 串口配置、枚举、打开、关闭、4096 字节接收缓存和后台读取循环。
+- 串口配置、枚举、打开、关闭、4096 字节接收缓存和唯一 BaseStream.ReadAsync 后台读取循环；
+  先以可控 Stream 验证取消、关闭、断线和只交付一次，再接入 SerialPort 生命周期。
 - 标准结构/原始静默组帧、多帧拆分、分段累计、CRC 边界、溢出恢复。
-- TransactionId 单事务协调器、响应签名、总超时、迟到响应隔离、重同步与取消。
+- TransactionId 单事务协调器、无队列忙时背压、原子 TryComplete 完成门、响应签名、总超时、
+  迟到响应隔离、重同步与取消。
 - 地址、波特率、恢复出厂的独占专用事务及 ConfigurationUncertain 恢复路径。
 - 默认连接后静默等待手动指令。
 
 阶段 4：手动/定时发送与日志（TDD）
 - 手动发送和自动 CRC。
 - 常用指令与用户自定义指令。
-- 手动开启/停止、fixed-delay、代次复核且不积压的定时发送。
+- CommunityToolkit.Mvvm AsyncRelayCommand、IsTransactionBusy、命令 CanExecute 和重复点击 Busy 提示。
+- 手动开启/停止、fixed-delay、代次复核、Busy 时等待完整间隔且不积压的定时发送。
 - 5000 条通信数据日志、750 条实时视图、批量 UI 投递、筛选和线程池导出。
 
 阶段 5：WPF 第五版视觉壳
@@ -649,6 +722,11 @@ dotnet publish src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Release
 [ ] 六项数据卡与具体报警项显示正确。
 [ ] 原始收发、常用指令、手动发送、自动 CRC、定时发送均可用。
 [ ] 串口拔出、超时、迟到响应、CRC 错误、粘包、分段和异常响应不会导致崩溃或错误覆盖数据。
+[ ] System.IO.Ports、CommunityToolkit.Mvvm、NUnit、测试适配器和测试宿主均使用第 6.1 节固定版本，
+    packages.lock.json 已提交且 locked-mode 恢复成功。
+[ ] SerialPortTransport 生产接收路径只使用一个 BaseStream.ReadAsync 循环；取消、关闭和拔出均能退出。
+[ ] 所有事务终态只经原子 TryComplete 入口；边界竞态不会重复完成、更新 UI 或释放资源。
+[ ] Busy 期间重复点击不会排队或写串口，发送类命令正确禁用并显示明确提示。
 [ ] 所有新增函数和参数均有中文 XML 注释，代码采用 Allman 风格。
 [ ] dotnet test 0 失败。
 [ ] Release 构建成功。
@@ -676,5 +754,9 @@ INVARIANT-13：迟到或未请求响应不得完成尚未发送或不同 Transac
 INVARIANT-14：定时发送任何时刻最多一个等待/执行项；停止后的旧 ScheduleGeneration 不得写串口。
 INVARIANT-15：事务协调器只依赖 ISerialTransport 和 TimeProvider；自动化测试不得依赖真实串口硬件或真实时间等待。
 INVARIANT-16：实时消息流最多 750 条可视数据并启用 WPF UI 虚拟化，不逐字节更新 UI。
+INVARIANT-17：生产串口接收只能使用一个 BaseStream.ReadAsync 循环；不得混用 DataReceived、BytesToRead 轮询或 SerialPort.Read。
+INVARIANT-18：每个事务只有一个原子完成入口；只有第一个终态事件可完成任务和发布最终 UI 状态。
+INVARIANT-19：协调器不得建立请求等待队列；Busy 期间所有新请求立即拒绝且不得写串口。
+INVARIANT-20：MVVM 固定使用 CommunityToolkit.Mvvm；测试固定使用 NUnit，开发中途不得并用或替换框架。
 
 —— 设计计划正文结束 ——

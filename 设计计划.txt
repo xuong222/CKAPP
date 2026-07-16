@@ -131,7 +131,7 @@ automatic_send_on_connect = false
 
 状态序列：
 Disconnected -> ConnectedIdle -> Sending -> WaitingResponse -> Completed/Failed
-Failed(Timeout) -> Resynchronizing -> RecoveryRequired -> ConnectedIdle/Disconnected
+Failed(Timeout) -> Resynchronizing -> ConnectedIdle（获得完整静默窗口）/Disconnected（重同步超限）
 
 规则：
 1. 连接成功后进入 ConnectedIdle，不创建自动轮询任务。
@@ -145,8 +145,8 @@ Failed(Timeout) -> Resynchronizing -> RecoveryRequired -> ConnectedIdle/Disconne
    当前事务发送之后、事务截止时间之前到达并通过签名校验的候选才可进入成功路径。
 7. 超时后事务进入 Resynchronizing，停止定时发送且不得自动重试；事务协调器执行第 3.5 节的迟到响应隔离。
 8. 手动指令可在定时模式下优先插队；手动事务完成后，定时计划继续，但定时任务不得积压。
-9. 定时发送使用 fixed-delay：本次事务完成并经过设定间隔后才计划下一次；任何时刻最多一个定时任务
-   处于等待入队或执行状态。定时触发时若已有定时任务未完成，则合并/跳过该次触发并增加 skipped 计数。
+9. 定时发送使用纯 fixed-delay：只有本次事务完成后才开始等待一个完整设定间隔，间隔结束后发起下一次；
+   事务执行期间不存在周期 tick、待合并触发或补发队列，因此任何时刻最多只有一个定时发送流程。
 10. 停止定时发送时递增 ScheduleGeneration 并取消令牌；入队前和真正写串口前都必须复核代次，
     从而覆盖“下一次任务恰好准备入队”的竞态。已开始的单次事务允许完成，但不得再安排下一次。
 11. 断开串口时递增 PortGeneration，取消等待中的事务与定时计划，并释放串口句柄。
@@ -157,9 +157,10 @@ Failed(Timeout) -> Resynchronizing -> RecoveryRequired -> ConnectedIdle/Disconne
 - MODBUS_RTU_MAX_FRAME_BYTES = 256（官方 RTU ADU 最大长度）。
 - RECEIVE_RING_BUFFER_BYTES = 4096（后台接收环形缓存上限）。
 - RAW_CAPTURE_MAX_BYTES = 4096（一次原始调试捕获上限，可容纳粘连的多个标准帧）。
-- RESPONSE_TIMEOUT_MS = 1000（可配置 50..60000 ms）。
+- RESPONSE_TIMEOUT_MS = 1000（可配置 50..5000 ms）。
 - RAW_INTER_BYTE_TIMEOUT_MS = max(ceil(t3.5), 10 ms)，可配置 2..1000 ms。
-- RESYNCHRONIZATION_MAX_MS = 5000。
+- LATE_RESPONSE_GUARD_MS = max(RESPONSE_TIMEOUT_MS, 100 ms)。
+- RESYNCHRONIZATION_MAX_MS = 2 * LATE_RESPONSE_GUARD_MS（随响应超时联动，范围 200..10000 ms）。
 
 字符时间计算：
 character_bits = 1 个起始位 + data_bits + (parity=None ? 0 : 1) + stop_bits
@@ -202,8 +203,9 @@ RAW_INTER_BYTE_TIMEOUT_MS 作为捕获结束条件。
 2. 请求超时后关闭当前 TransactionId，并进入 Resynchronizing；所有隔离期字节标记为
    LateOrUnsolicited，绝不能完成后续事务。
 3. 隔离静默窗口 LateResponseGuardMs = max(ResponseTimeoutMs, 100 ms)。收到任何字节即重新计时，
-   只有连续静默满足该窗口后才完成重同步；总重同步时间不得超过 5000 ms。
-4. 重同步超出 5000 ms 时主动断开串口并要求用户重新连接，不继续猜测帧归属。
+   只有连续静默满足该窗口后才完成重同步；总重同步时间上限为 2 * LateResponseGuardMs。
+4. 重同步达到 2 * LateResponseGuardMs 仍未获得完整静默窗口时，主动断开串口并要求用户重新连接，
+   不继续猜测帧归属。
 5. 超时事务的请求签名（地址、功能码、起始地址、数量、写入值）保留到重同步完成；
    定时发送不会自动发出相同请求。用户重试前 UI 显示“上一响应可能迟到”的明确提示。
 6. Modbus-RTU 没有线上 Transaction ID。若两个完全相同的请求之间存在任意长设备延迟，
@@ -236,7 +238,7 @@ RAW_INTER_BYTE_TIMEOUT_MS 作为捕获结束条件。
 
 3.8 地址、波特率与恢复出厂专用流程
 
-1. 三类操作获取独占事务锁，暂停定时发送，不与普通 0x10 批量参数写入混合。
+1. 三类操作获取独占事务锁并自动关闭定时发送，不与普通 0x10 批量参数写入混合。
 2. 修改地址：在旧地址下发送 0x06 并验证完整回显；成功后才更新本地从站地址。
 3. 修改波特率：在旧波特率下发送 0x06 并验证完整回显；成功后关闭端口并用新波特率重新打开。
 4. 恢复出厂：二次确认后在旧配置下写 40036=1；回显成功后切换到地址 1、9600-8-N-1。
@@ -245,6 +247,8 @@ RAW_INTER_BYTE_TIMEOUT_MS 作为捕获结束条件。
 6. 地址变更不确定时可提供 0xFE 查询，但界面必须醒目提示：
    “未知地址查询仅适用于总线上只有一个设备的情况；多设备同时应答会产生总线冲突。”
 7. 原始调试模式允许专家自行发送涉及这些寄存器的帧，但不触发自动切换；日志显示风险提示。
+8. 无论专用操作成功、失败、进入 ConfigurationUncertain 或重新打开串口，定时发送都保持关闭；
+   只有用户再次手动点击“启动定时发送”后才能恢复。
 
 -------------------------------------------------------------------------------
 4. 寄存器模型
@@ -424,25 +428,31 @@ Tests -> 被测项目
    不暴露 System.IO.Ports.SerialPort，供协调器和测试注入使用。
 7. SerialPortTransport：ISerialTransport 的生产实现；维护单一后台读取循环，输出字节块和单调到达时间。
 8. RtuReceiveFramer：实现结构长度、静默、CRC 边界、多帧拆分、缓存上限和溢出恢复。
-9. ModbusTransactionCoordinator：只依赖 ISerialTransport；分配 TransactionId，确保请求串行化，
-   管理签名匹配、总超时、取消、迟到响应隔离和特殊配置事务。
-10. PeriodicSendService：仅在用户手动开启后以 fixed-delay 调度；通过代次检查保证停止后不积压任务。
-11. FakeSerialTransport：测试专用可编程传输，可精确控制写入、接收块、时间推进和断开。
+9. ModbusTransactionCoordinator：只依赖 ISerialTransport 和 TimeProvider；分配 TransactionId，
+   确保请求串行化，管理签名匹配、总超时、取消、迟到响应隔离和特殊配置事务。
+10. PeriodicSendService：依赖 TimeProvider，仅在用户手动开启后以纯 fixed-delay 调度；
+    通过取消令牌和代次检查保证停止后不积压任务。
+11. FakeSerialTransport：测试专用可编程传输，可精确控制写入、接收块和断开。
 12. SimulatedModbusDevice：测试专用模拟设备，解析请求并可脚本化产生正常响应、延迟响应、CRC 错误、
     异常响应、分段响应、两帧粘连、无响应和串口断开。
-13. SettingsStore：保存非敏感 UI/串口偏好到 UTF-8 JSON。
-14. CommunicationLogService：维护 5000 条数据日志和 750 条实时视图投影，并导出 UTF-8 文本。
-15. MainWindowViewModel：导航、连接状态和跨页面共享状态。
+13. ManualTimeProvider：测试专用可控单调时钟，继承 TimeProvider；推进虚拟时间时同步触发到期计时器，
+    使超时、静默窗口、迟到隔离和 fixed-delay 测试不依赖真实等待。
+14. SettingsStore：保存非敏感 UI/串口偏好到 UTF-8 JSON。
+15. CommunicationLogService：维护 5000 条数据日志和 750 条实时视图投影，并导出 UTF-8 文本。
+16. MainWindowViewModel：导航、连接状态和跨页面共享状态。
 
 6.4 线程规则
 
 1. 串口读取、超时等待、文件导出不得阻塞 WPF UI 线程。
 2. ViewModel 批量更新 ObservableCollection 或绑定属性时切回 Dispatcher；单字节接收不得直接更新 UI。
 3. 串口生命周期使用异步锁或 SemaphoreSlim 防止重复打开/关闭。
-4. Modbus 事务协调器只依赖 ISerialTransport，保证一次一个请求；任何页面不得直接依赖或写 SerialPort。
+4. Modbus 事务协调器只依赖 ISerialTransport 和 TimeProvider，保证一次一个请求；
+   任何页面不得直接依赖或写 SerialPort。
 5. 定时发送使用 CancellationToken；窗口关闭时必须取消并等待后台任务结束。
-6. 日志导出使用不可变快照在线程池执行；导出失败不得影响串口接收循环。
-7. 不使用 Thread.Abort，不使用无限阻塞 Read，不吞掉后台异常。
+6. 所有生产超时、静默判断、时间戳和定时调度均注入 TimeProvider；生产环境使用 TimeProvider.System，
+   测试使用 ManualTimeProvider。业务代码禁止直接读取 DateTime.Now，也禁止使用不可控的 Task.Delay。
+7. 日志导出使用不可变快照在线程池执行；导出失败不得影响串口接收循环。
+8. 不使用 Thread.Abort，不使用无限阻塞 Read，不吞掉后台异常。
 
 -------------------------------------------------------------------------------
 7. 异常处理与用户反馈
@@ -466,7 +476,7 @@ Tests -> 被测项目
 14. 迟到/未请求响应：保留原始帧、旧 TransactionId（若可知）和 ReceiveSequence，
     标记 LateOrUnsolicited，不更新数据卡。
 15. 地址/波特率/恢复出厂响应丢失：进入 ConfigurationUncertain，停止定时发送并展示恢复选项。
-16. 重同步超过 5000 ms：主动断开并要求重新连接，不继续自动尝试。
+16. 重同步达到 2 * LateResponseGuardMs 仍未恢复：主动断开并要求重新连接，不继续自动尝试。
 
 错误消息不得只显示“失败”；必须包含操作、对象和可行动的恢复建议。
 
@@ -517,7 +527,8 @@ Tests -> 被测项目
 2. 手动发送产生一次事务。
 3. 定时发送只有手动启动后才产生事务。
 4. 停止定时发送时，下一次任务恰好准备入队：代次检查阻止入队或写出，队列不积压。
-5. 固定延迟定时发送在单次响应慢于间隔时跳过/合并触发，不并发且不追赶补发。
+5. 纯固定延迟定时发送在单次响应慢于设定间隔时，不产生并发 tick、跳过计数或追赶补发；
+   事务完成后必须再等待一个完整间隔才发送下一次。
 6. 手动请求和定时请求同时触发：手动优先，串口无并发写，定时计划随后恢复。
 7. 串口在等待响应时被拔出：事务取消、锁释放、定时停止、UI 状态断开。
 8. 响应恰好在总超时边界前/后到达：只能有一个确定终态，不双重完成。
@@ -530,12 +541,15 @@ Tests -> 被测项目
 15. 地址修改响应成功：验证旧地址回显后更新本地地址。
 16. 地址修改响应丢失但设备实际已切换：进入 ConfigurationUncertain，不自动假定旧/新地址。
 17. 波特率修改响应成功/丢失、恢复出厂响应成功/丢失分别覆盖专用流程。
-18. 0xFE 查询仅接受真实地址与寄存器值一致的响应；UI/命令模型包含“仅单设备”警告。
-19. FakeSerialTransport 与 SimulatedModbusDevice 分别制造延迟、CRC 错误、异常、分段、粘包、
-    无响应和断开；协调器测试不得实例化真实 SerialPort。
-20. 日志数据缓存 5000 条、实时视图 750 条分别裁剪；批量 UI 更新不逐字节调度。
-21. 日志筛选正确，UTF-8 导出中文无乱码，导出不阻塞通信事务。
-22. 配置缺失、合法、损坏三种加载路径。
+18. 地址、波特率或恢复出厂流程成功、失败、状态不确定及重新打开串口后，定时发送均保持关闭；
+    只有再次手动启动才恢复。
+19. 0xFE 查询仅接受真实地址与寄存器值一致的响应；UI/命令模型包含“仅单设备”警告。
+20. FakeSerialTransport 与 SimulatedModbusDevice 分别制造延迟、CRC 错误、异常、分段、粘包、
+    无响应和断开；ManualTimeProvider 精确推进边界时间；协调器测试不得实例化真实 SerialPort，
+    也不得通过真实睡眠等待超时。
+21. 日志数据缓存 5000 条、实时视图 750 条分别裁剪；批量 UI 更新不逐字节调度。
+22. 日志筛选正确，UTF-8 导出中文无乱码，导出不阻塞通信事务。
+23. 配置缺失、合法、损坏三种加载路径。
 
 9.4 构建与人工验收
 
@@ -617,7 +631,8 @@ dotnet publish src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Release
 - win-x64 自包含单文件发布脚本。
 - 最终验收、截图和发布目录整理。
 
-每一阶段必须满足：失败测试 -> 最小实现 -> 测试通过 -> 重构 -> 完整验证。
+每一阶段中的协议行为、状态转换和已发现缺陷必须满足：失败测试 -> 最小实现 -> 测试通过 -> 重构 -> 完整验证；
+纯视觉 XAML 按“构建成功 -> 截图验收 -> 修订 -> 再验收”执行，不为无独立行为的样板代码制造测试。
 
 -------------------------------------------------------------------------------
 11. 完成定义（Definition of Done）
@@ -659,7 +674,7 @@ INVARIANT-11：寄存器解释必须来自逐项定义，禁止全局套用 int1
 INVARIANT-12：单个 Modbus RTU 帧不得超过 256 字节；缓存溢出不得把部分帧交给业务层。
 INVARIANT-13：迟到或未请求响应不得完成尚未发送或不同 TransactionId 的事务。
 INVARIANT-14：定时发送任何时刻最多一个等待/执行项；停止后的旧 ScheduleGeneration 不得写串口。
-INVARIANT-15：事务协调器只依赖 ISerialTransport，自动化测试不得依赖真实串口硬件。
+INVARIANT-15：事务协调器只依赖 ISerialTransport 和 TimeProvider；自动化测试不得依赖真实串口硬件或真实时间等待。
 INVARIANT-16：实时消息流最多 750 条可视数据并启用 WPF UI 虚拟化，不逐字节更新 UI。
 
 —— 设计计划正文结束 ——

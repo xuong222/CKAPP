@@ -1,5 +1,7 @@
 ﻿using CH32UpperComputer.Core.Protocol;
 
+using System.Runtime.InteropServices;
+
 namespace CH32UpperComputer.Core.Tests.Protocol
 {
     /// <summary>
@@ -123,6 +125,27 @@ namespace CH32UpperComputer.Core.Tests.Protocol
 
             Assert.That(result.IsSuccess, Is.True, result.ErrorMessage);
             Assert.That(result.HasValidTrailingCrc, Is.False);
+        }
+
+        /// <summary>
+        /// 验证调用方即使从一次字节视图中取回并修改底层数组，也不能改变解析结果的内部帧数据。
+        /// </summary>
+        [Test]
+        public void Bytes_MutatingRecoveredBackingArray_DoesNotChangeResult()
+        {
+            byte[] expectedFrame = [0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A];
+            HexFrameParseResult result = HexFrameParser.TryParse("01 03 00 00 00 01 84 0A", 256);
+            ReadOnlyMemory<byte> exposedBytes = result.Bytes;
+
+            bool recoveredArray = MemoryMarshal.TryGetArray(exposedBytes, out ArraySegment<byte> backingSegment);
+
+            Assert.That(recoveredArray, Is.True);
+            Assert.That(backingSegment.Array, Is.Not.Null);
+
+            backingSegment.Array![backingSegment.Offset] ^= 0xFF;
+
+            Assert.That(result.Bytes.ToArray(), Is.EqualTo(expectedFrame));
+            Assert.That(result.HasValidTrailingCrc, Is.True);
         }
     }
 }

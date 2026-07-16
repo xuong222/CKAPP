@@ -38,9 +38,10 @@ namespace CH32UpperComputer.Core.Protocol
         public bool IsSuccess { get; }
 
         /// <summary>
-        /// 获取成功解析后的只读字节视图；解析失败时为空。
+        /// 获取成功解析字节防御性副本的只读视图；解析失败时为空。
+        /// 每次访问均返回独立副本，调用方无法经由该视图改变结果对象的内部帧数据。
         /// </summary>
-        public ReadOnlyMemory<byte> Bytes => bytes;
+        public ReadOnlyMemory<byte> Bytes => (byte[])bytes.Clone();
 
         /// <summary>
         /// 获取解析失败时面向用户的错误信息；解析成功时为 <see langword="null"/>。

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～2 已完成并通过双重审查；下一步执行 Task 3
+implementation_status = Task 1～3 已完成并通过双重审查；下一步执行 Task 4
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1017,39 +1017,44 @@ Run: `git commit -m "feat(core): add Modbus CRC and hex parsing"`
 - Create: `tests\CH32UpperComputer.Core.Tests\Protocol\ModbusRequestParserTests.cs`
 - Create: `tests\CH32UpperComputer.Core.Tests\Protocol\ModbusResponseParserTests.cs`
 
-- [ ] **Step 1: 写 0x03/0x06/0x10/0xFE 构建失败测试**
+- [x] **Step 1: 写 0x03/0x06/0x10/0xFE 构建失败测试**
 
 断言请求主体、CRC、地址 1..64、数量/字节数、0x10 值数量一致；0xFE 只能生成 `FE 03 00 00 00 01 + CRC`。另写手输请求识别测试：完整 CRC 正确且结构合法的 0x03/0x06/0x10/0xFE 可还原为带响应签名的 ModbusRequest；错误 CRC、未知功能码、长度/byte-count 不符或任意私有帧返回“不支持标准识别”，留给 RawDebug。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter "FullyQualifiedName~ModbusRequestFactoryTests|FullyQualifiedName~ModbusRequestParserTests"`
 Expected: FAIL，请求工厂/识别器尚不存在。
 
-- [ ] **Step 3: 实现不可变请求和工厂**
+- [x] **Step 3: 实现不可变请求和工厂**
 
 `ModbusRequest` 必须包含 SlaveAddress、FunctionCode、StartAddress、Quantity、RawFrame、ExpectedResponseLength 和响应签名；工厂提供 `CreateReadHoldingRegisters`、`CreateWriteSingleRegister`、`CreateWriteMultipleRegisters`、`CreateUnknownAddressQuery`。`ModbusRequestParser.TryParseSupported` 对最终将发送的完整帧执行 CRC 与结构校验，只识别上述四类请求并复用工厂/同一校验规则，禁止复制一套宽松解析。
 
-- [ ] **Step 4: 写响应解析失败测试**
+- [x] **Step 4: 写响应解析失败测试**
 
 覆盖 0x03 `总长度=5+byte-count`、0x06/0x10 固定 8 字节、异常帧固定 5 字节，以及 CRC、短帧、超长帧、错误地址/功能码/byte-count/回显。0xFE 用以下专用断言：响应地址 1..64、功能码 0x03、一个寄存器、值等于响应地址。
 
-- [ ] **Step 5: 运行并确认响应解析行为失败**
+- [x] **Step 5: 运行并确认响应解析行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~ModbusResponseParserTests`
 Expected: FAIL，ModbusResponseParser 未定义。
 
-- [ ] **Step 6: 实现结构化解析结果**
+- [x] **Step 6: 实现结构化解析结果**
 
 解析器不得更新寄存器或 UI，只返回 `Succeeded`、`ModbusException` 或 `ProtocolError`；保留原始帧与异常码。普通请求必须执行完整签名匹配。
 
-- [ ] **Step 7: 运行测试并提交**
+- [x] **Step 7: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Core\Protocol tests\CH32UpperComputer.Core.Tests\Protocol`
 Run: `git commit -m "feat(core): add Modbus requests and response parsing"`
+
+**Execution Record (2026-07-16):** 请求类型缺失 RED 后工厂/严格识别 18/18 GREEN；响应类型缺失
+RED 后响应解析 18/18 GREEN；Core 全量 51/51，Debug build 0 warning/0 error，format verify 退出 0。
+实现提交 `1b3973e`，规格审查通过，质量审查无 Critical/Important 问题。最长合法 0x03/0x10 边界
+回归作为 Minor 建议加入 Task 16。
 
 ### Task 4: 36 项寄存器、缩放和报警模型（TDD）
 
@@ -1694,7 +1699,7 @@ Run: `git commit -m "feat(app): add parameter register and log workflows"`
 
 - [ ] **Step 1: 写正常端到端失败测试**
 
-连接 Fake + SimulatedModbusDevice 后仍 0 写入；手动 0x03 更新六项快照/卡片；0x06/0x10 成功后回读；TX/RX 日志具有同一 TransactionId。
+连接 Fake + SimulatedModbusDevice 后仍 0 写入；手动 0x03 更新六项快照/卡片；0x06/0x10 成功后回读；TX/RX 日志具有同一 TransactionId。另覆盖 0x03 数量 125 的 255 字节最长合法响应，以及 0x10 数量 123 的 255 字节最长合法请求构建、严格识别和回显往返。
 
 - [ ] **Step 2: 写故障矩阵失败测试**
 

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～3 已完成并通过双重审查；下一步执行 Task 4
+implementation_status = Task 1～4 已完成并通过双重审查；下一步执行 Task 5
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -556,17 +556,22 @@ Tests -> 被测项目
 6. 不收集网络数据，不上传日志，不保存凭据。
 
 -------------------------------------------------------------------------------
-9. 测试策略（强制测试先行）
+9. 测试与构建策略（构建优先、里程碑集中验证）
 -------------------------------------------------------------------------------
 
-9.1 TDD 规则
+9.1 实施与验证节奏
 
-1. 每项协议行为、状态转换和已发现缺陷必须先有一个会因目标行为缺失而失败的测试；
-   不强制为纯属性转发、框架样板或无独立行为的每个生产函数制造低价值测试。
-2. 必须实际运行测试并确认失败原因正确，再写最小实现。
-3. 实现后运行目标测试和完整测试集。
-4. 发现缺陷时先添加可复现缺陷的失败测试，再修复。
-5. UI 视觉代码无法完全单元测试时，业务逻辑移入 ViewModel/Service 测试，XAML 进行构建和截图验证。
+2026-07-16 用户调整：降低测试执行频率，将实施重心转向可运行功能和界面构建。本节规则覆盖后续
+任务中更细粒度的“每个小步骤立即运行测试”措辞，但不删除关键协议与并发回归覆盖。
+
+1. 以一个可运行功能块为基本实施单位：先连续完成该功能块的生产代码、接线和必要界面，再做一次集中验证；
+   不在每个类、函数或微小编辑后反复运行完整测试集。
+2. CRC、组帧、事务完成门、迟到响应、串口断开、Busy 背压、定时停止竞态和已发现缺陷等高风险行为，
+   仍保留针对性自动化测试；允许在功能块实现前一次性写好代表性失败测试，再集中完成实现。
+3. 每个 Task 收尾时运行该模块的聚焦测试；每完成一个可运行阶段或准备发布时，才运行全量测试。
+4. 每个连贯功能块至少执行一次 Debug 构建；WPF 视觉工作以构建成功、实际启动和截图检查为主要验收手段。
+5. 发现真实缺陷时，先留下最小可复现回归测试再修复；不得为增加测试数量而制造低价值用例。
+6. UI 业务逻辑优先放入 ViewModel/Service；纯 XAML 视觉不强制单元测试，采用构建和截图验收。
 
 9.2 Core 测试矩阵
 
@@ -1069,54 +1074,61 @@ RED 后响应解析 18/18 GREEN；Core 全量 51/51，Debug build 0 warning/0 er
 - Create: `tests\CH32UpperComputer.Core.Tests\Registers\RegisterValueConverterTests.cs`
 - Create: `tests\CH32UpperComputer.Core.Tests\Registers\AlarmStateTests.cs`
 
-- [ ] **Step 1: 写完整性失败测试**
+- [x] **Step 1: 写完整性失败测试**
 
 断言定义数量恰为 36、文档地址连续 40001..40036、协议地址连续 0x0000..0x0023、地址唯一；逐项断言第 4 节 RawEncoding、可写性、原始范围、缩放、精度和单位。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~Registers`
 Expected: FAIL，寄存器类型尚不存在。
 
-- [ ] **Step 3: 实现唯一寄存器表**
+- [x] **Step 3: 实现唯一寄存器表**
 
 `DeviceRegisterMap` 使用只读集合一次性列出第 4 节全部 36 项；禁止根据地址段推断统一 int16。每个 `RegisterDefinition` 自带原始解释和转换委托/比例。
 
-- [ ] **Step 4: 写边界与缩放失败测试**
+- [x] **Step 4: 写边界与缩放失败测试**
 
 覆盖 40003 温度 raw/100、40004 MQ2 线性单位非 ppm、CO/SO2 精度、负补偿二进制补码、地址/波特率 UInt16、回差必须 <=0、只读拒绝和所有可写项最小/最大/越界。
 
-- [ ] **Step 5: 运行并确认转换行为失败**
+- [x] **Step 5: 运行并确认转换行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~RegisterValueConverterTests`
 Expected: FAIL，转换/范围行为尚未实现。
 
-- [ ] **Step 6: 实现转换、快照与越界诊断**
+- [x] **Step 6: 实现转换、快照与越界诊断**
 
 响应越界值保留 raw 并标记诊断，不静默钳位；只有 CRC/签名/长度通过的解析结果能调用 `DeviceSnapshot.Apply`。
 
-- [ ] **Step 7: 写报警位失败测试**
+- [x] **Step 7: 写报警位失败测试**
 
 覆盖 40009 综合继电器、40010 六个具体报警位，以及 40023 bit0..bit5 六项报警使能映射；
 40023 只允许低 6 位，读回更新快照和逐项开关，写入 0x0040..0xFFFF 必须拒绝。未知报警状态位保留为诊断但不虚构传感器。
 
-- [ ] **Step 8: 运行并确认报警行为失败**
+- [x] **Step 8: 运行并确认报警行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests --filter FullyQualifiedName~AlarmStateTests`
 Expected: FAIL，AlarmState 尚未实现。
 
-- [ ] **Step 9: 实现报警模型**
+- [x] **Step 9: 实现报警模型**
 
 只根据 40009/40010 原始值生成综合状态和六项具体报警；根据 40023 生成六项使能状态并保留十六进制掩码；
 不得根据测量值自行制造正式报警，也不得把“已使能”显示成“正在报警”。
 
-- [ ] **Step 10: 运行完整测试并提交**
+- [x] **Step 10: 运行完整测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Core.Tests`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Core\Registers tests\CH32UpperComputer.Core.Tests\Registers`
 Run: `git commit -m "feat(core): define device registers and alarms"`
+
+**Execution Record (2026-07-16):** 完成 36 项独立寄存器定义、逐项 UInt16/Int16 原始解释、
+显示缩放、22 项写入边界、设备快照原子门控和六路报警模型。补充成功响应与实际解析请求关联，
+阻止同形状不同起始地址响应及 0xFE 地址发现结果误写快照。规格审查发现测试预言曾依赖生产定义后，
+已改为测试内独立固定 36 项定义与 22 项边界，复审通过。Registers 74/74、Core 119/119，
+Debug build 0 warning/0 error，format verify 与 diff check 通过；实现提交 `7c2f61a`，质量审查无
+Critical/Important 问题。根据用户最新要求，后续改用第 9.1 节的构建优先、里程碑集中验证节奏。
 
 ### Task 5: 串口抽象与确定性测试工具
 

@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CH32UpperComputer.App\CH32UpperComputer.App.csproj" />
+    <ProjectReference Include="..\..\src\CH32UpperComputer.Core\CH32UpperComputer.Core.csproj" />
+    <ProjectReference Include="..\..\src\CH32UpperComputer.Infrastructure\CH32UpperComputer.Infrastructure.csproj" />
+    <ProjectReference Include="..\CH32UpperComputer.Testing\CH32UpperComputer.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="NUnit.Framework" />
+  </ItemGroup>
+
+</Project>

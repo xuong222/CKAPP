@@ -1,4 +1,4 @@
-.superpowers/
+﻿.superpowers/
 .worktrees/
 .codex_tmp/
 .vs/
@@ -7,3 +7,12 @@
 TestResults/
 *.user
 *.suo
+*.userosscache
+*.sln.docstates
+*.cache
+*.log
+*.tmp
+*.bak
+artifacts/obj/
+artifacts/temp/
+artifacts/tmp/

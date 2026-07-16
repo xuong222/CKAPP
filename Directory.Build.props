@@ -1,0 +1,12 @@
+﻿<Project>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <CodePage>65001</CodePage>
+    <Utf8Output>true</Utf8Output>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

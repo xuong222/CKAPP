@@ -77,6 +77,11 @@ namespace CH32UpperComputer.Testing
         private int closeOperationCount;
 
         /// <summary>
+        /// 首次永久释放模拟传输的次数；幂等重复释放不会增加该值。
+        /// </summary>
+        private int disposeOperationCount;
+
+        /// <summary>
         /// 下一次写入时需要抛出的脚本化 I/O 异常。
         /// </summary>
         private IOException? nextWriteException;
@@ -218,6 +223,20 @@ namespace CH32UpperComputer.Testing
                 lock (syncRoot)
                 {
                     return closeOperationCount;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取模拟传输实际进入永久释放路径的次数。
+        /// </summary>
+        public int DisposeOperationCount
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return disposeOperationCount;
                 }
             }
         }
@@ -543,6 +562,7 @@ namespace CH32UpperComputer.Testing
                 }
 
                 isDisposed = true;
+                disposeOperationCount = checked(disposeOperationCount + 1);
                 session = currentSession;
 
                 if (session is not null)
@@ -649,7 +669,7 @@ namespace CH32UpperComputer.Testing
         /// <summary>
         /// 测试释放写入时完成的异步信号。
         /// </summary>
-        private readonly TaskCompletionSource releaseSource = new(
+        private readonly TaskCompletionSource<IOException?> releaseSource = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>
@@ -662,7 +682,17 @@ namespace CH32UpperComputer.Testing
         /// </summary>
         public void Release()
         {
-            releaseSource.TrySetResult();
+            releaseSource.TrySetResult(null);
+        }
+
+        /// <summary>
+        /// 让已经进入暂停点的写操作以指定 I/O 故障退出，用于制造写失败与取消的完成门竞态。
+        /// </summary>
+        /// <param name="exception">写操作恢复后需要原样抛出的串口 I/O 异常。</param>
+        public void ReleaseWithFailure(IOException exception)
+        {
+            ArgumentNullException.ThrowIfNull(exception);
+            releaseSource.TrySetResult(exception);
         }
 
         /// <summary>
@@ -680,7 +710,14 @@ namespace CH32UpperComputer.Testing
         /// <returns>暂停门释放后完成的任务。</returns>
         internal async Task WaitForReleaseAsync(CancellationToken cancellationToken)
         {
-            await releaseSource.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            IOException? exception = await releaseSource.Task
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (exception is not null)
+            {
+                throw exception;
+            }
         }
     }
 }

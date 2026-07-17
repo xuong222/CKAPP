@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～15 已完成；下一完整功能为“模拟设备端到端与并发边界”Task 16，完成完整功能后再集中验证
+implementation_status = Task 1～16 已完成；下一完整功能为“UTF-8 文档与 win-x64 单文件发布”Task 17，完成完整交付功能后再集中验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1755,43 +1755,45 @@ Run: `git commit -m "feat(app): add parameter register and log workflows"`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Integration\TransactionRaceTests.cs`
 - Create: `tests\CH32UpperComputer.App.Tests\Integration\ApplicationWorkflowTests.cs`
 
-- [ ] **Step 1: 写正常端到端失败测试**
+- [x] **Step 1: 写正常端到端失败测试**
 
 连接 Fake + SimulatedModbusDevice 后仍 0 写入；手动 0x03 更新六项快照/卡片；0x06/0x10 成功后回读；TX/RX 日志具有同一 TransactionId。另覆盖 0x03 数量 125 的 255 字节最长合法响应，以及 0x10 数量 123 的 255 字节最长合法请求构建、严格识别和回显往返。
 
-- [ ] **Step 2: 写故障矩阵失败测试**
+- [x] **Step 2: 写故障矩阵失败测试**
 
 逐项脚本：延迟响应、CRC 错误、Modbus 异常、分段、两帧粘包、无响应、串口断开、接收溢出。断言失败路径、日志和数据卡不被非法更新。
 
-- [ ] **Step 3: 写完成门竞态矩阵**
+- [x] **Step 3: 写完成门竞态矩阵**
 
 至少覆盖：响应/超时、异常/超时、写失败/取消、取消/响应、断开/超时、溢出/取消、应用退出/响应。每组只有一个事务终态、一次 TCS 完成、一次活动门释放；连接级清理幂等。
 
-- [ ] **Step 4: 写请求洪泛与定时并发测试**
+- [x] **Step 4: 写请求洪泛与定时并发测试**
 
 在断线/慢响应期间并发触发 100 次发送命令，断言最多 1 个活动事务、其余 Busy、写入数不超过 1、无请求积压对象；手动和定时同时到达只有一个胜出，定时失败后等待完整间隔。
 
-- [ ] **Step 5: 写关闭窗口等待事务测试**
+- [x] **Step 5: 写关闭窗口等待事务测试**
 
 活动事务等待响应时关闭应用：ApplicationStopping 与其他终态竞争，后台读取/定时/导出任务退出，串口只 Dispose 一次，无未观察异常。
 
-- [ ] **Step 6: 运行新增端到端测试并检查结果**
+- [x] **Step 6: 运行新增端到端测试并检查结果**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~Integration`
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~Integration`
 Expected: 如果 Tasks 1～15 已完整覆盖，允许新增集成测试首次运行即全部 PASS；若任何测试 FAIL，先确认失败是否揭示真实接线/边界缺陷而不是测试错误，再进入修复。不得为了满足“必须红灯”而故意破坏已通过行为。
 
-- [ ] **Step 7: 实现必要最小修正并运行完整测试**
+- [x] **Step 7: 实现必要最小修正并运行完整测试**
 
 对本步骤发现的每个真实失败保留复现测试，再做最小修复；若 Step 6 已全部通过，本步骤只运行完整回归，不制造无价值改动。不得为通过测试放宽 CRC、签名、Busy 或容量不变量。
 
 Run: `dotnet test -c Debug`
 Expected: 全部 PASS，0 failed，无真实串口和真实时间等待依赖。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 Run: `git add tests src`
 Run: `git commit -m "test: cover simulated device and transaction races"`
+
+**Execution Record (2026-07-17):** 新增 FakeSerialTransport + SimulatedModbusDevice 端到端组合，覆盖连接后零写入、0x03 快照、0x06/0x10 写后回读、最长 255 字节 0x03 响应与 0x10 请求，以及延迟、CRC 错误、Modbus 异常、分段、粘包、无响应、断开和 4096 字节接收溢出。七组实际协调器完成门竞态均验证唯一终态、一次完成通知和一次 Busy 释放；一百项请求洪泛全部立即拒绝且不分配事务编号，手动与定时冲突后定时发送等待完整新间隔。关闭流程新增应用操作排空门，确保 ApplicationStopping 后日志、快照、统计和观察者发布结束，再释放日志与串口；真实传输在组合根退出时显式且幂等 Dispose。集中验证结果为 Infrastructure Integration 19/19、App Integration 2/2；全解决方案 Core 119/119、Infrastructure 124/124、App 10/10，共 253/253 通过，`dotnet format --verify-no-changes` 与 `git diff --check` 均退出 0。
 
 ### Task 17: UTF-8 文档与 win-x64 单文件发布
 

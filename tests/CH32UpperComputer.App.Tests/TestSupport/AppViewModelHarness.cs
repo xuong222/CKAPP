@@ -15,6 +15,11 @@ namespace CH32UpperComputer.App.Tests.TestSupport
     internal sealed class AppViewModelHarness : IAsyncDisposable
     {
         /// <summary>
+        /// 防止测试主动关闭与 <see cref="DisposeAsync"/> 重复执行运行时退出序列。
+        /// </summary>
+        private int shutdownStarted;
+
+        /// <summary>
         /// 初始化完整应用层测试依赖。
         /// </summary>
         /// <param name="settings">应用层 ViewModel 使用的安全初始设置。</param>
@@ -176,11 +181,75 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         /// <returns>模拟响应注入完成后的任务。</returns>
         internal async Task RespondToWriteAsync(int expectedWriteCount)
         {
+            ReadOnlyMemory<byte> frame = await WaitForWriteAsync(expectedWriteCount)
+                .ConfigureAwait(false);
+            await Device.HandleWriteAsync(frame, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 等待模拟串口写历史达到指定数量并返回对应完整帧。
+        /// </summary>
+        /// <param name="expectedWriteCount">从一开始计数的目标写帧数量。</param>
+        /// <returns>目标位置完整写帧的防御性副本。</returns>
+        internal async Task<ReadOnlyMemory<byte>> WaitForWriteAsync(int expectedWriteCount)
+        {
+            if (expectedWriteCount <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(expectedWriteCount));
+            }
+
             await WaitUntilAsync(
                 () => Transport.WrittenFrames.Count >= expectedWriteCount,
                 TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-            ReadOnlyMemory<byte> frame = Transport.WrittenFrames[expectedWriteCount - 1];
-            await Device.HandleWriteAsync(frame, CancellationToken.None).ConfigureAwait(false);
+            await WaitUntilAsync(
+                () => Coordinator.State == TransactionCoordinatorState.WaitingResponse,
+                TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+            return Transport.WrittenFrames[expectedWriteCount - 1];
+        }
+
+        /// <summary>
+        /// 等待协调器完成指定接收块序号的组帧、匹配和诊断路由。
+        /// </summary>
+        /// <param name="minimumSequence">必须已经处理完成的最小接收块序号。</param>
+        /// <returns>目标序号完成处理后的任务。</returns>
+        internal async Task WaitForReceiveSequenceAsync(long minimumSequence)
+        {
+            if (minimumSequence <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(minimumSequence));
+            }
+
+            await WaitUntilAsync(
+                () => Coordinator.LastProcessedReceiveSequence >= minimumSequence,
+                TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 按生产组合根顺序停止定时发送、完成活动事务、退出接收循环并永久释放传输。
+        /// </summary>
+        /// <returns>整个退出序列首次执行完成后的任务；重复调用立即返回。</returns>
+        internal async Task ShutdownRuntimeAsync()
+        {
+            if (Interlocked.CompareExchange(ref shutdownStarted, 1, 0) != 0)
+            {
+                return;
+            }
+
+            await Periodic.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await Coordinator.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await Coordinator.WaitForBackgroundOperationsAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+            await OperationService.WaitForOperationsAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+            RegisterTool.Dispose();
+            Parameters.Dispose();
+            Monitor.Dispose();
+            CommandConsole.Dispose();
+            SerialConnection.Dispose();
+            await Periodic.DisposeAsync().ConfigureAwait(false);
+            await Coordinator.DisposeAsync().ConfigureAwait(false);
+            await Transport.DisposeAsync().ConfigureAwait(false);
+            LogService.Dispose();
         }
 
         /// <summary>
@@ -189,16 +258,7 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         /// <returns>全部后台读取与调度任务退出后的任务。</returns>
         public async ValueTask DisposeAsync()
         {
-            RegisterTool.Dispose();
-            Parameters.Dispose();
-            Monitor.Dispose();
-            CommandConsole.Dispose();
-            SerialConnection.Dispose();
-            await Periodic.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            await Coordinator.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            await Periodic.DisposeAsync().ConfigureAwait(false);
-            await Coordinator.DisposeAsync().ConfigureAwait(false);
-            LogService.Dispose();
+            await ShutdownRuntimeAsync().ConfigureAwait(false);
         }
 
         /// <summary>

@@ -47,6 +47,11 @@ namespace CH32UpperComputer.App
         private CommunicationLogService? communicationLogService;
 
         /// <summary>
+        /// 跟踪事务终态之后仍需完成的日志、快照、统计和观察者发布工作。
+        /// </summary>
+        private ModbusOperationService? operationService;
+
+        /// <summary>
         /// 主窗口聚合 ViewModel。
         /// </summary>
         private MainWindowViewModel? mainWindowViewModel;
@@ -78,12 +83,13 @@ namespace CH32UpperComputer.App
                 communicationLogService = new CommunicationLogService(timeProvider);
                 DeviceSnapshot snapshot = new();
                 WpfUiDispatcher dispatcher = new(Dispatcher);
-                ModbusOperationService operationService = new(
+                ModbusOperationService createdOperationService = new(
                     coordinator,
                     transport,
                     snapshot,
                     communicationLogService,
                     timeProvider);
+                operationService = createdOperationService;
                 SerialConnectionViewModel serialConnection = new(
                     transport,
                     coordinator,
@@ -97,23 +103,23 @@ namespace CH32UpperComputer.App
                     checked((byte)serialConnection.SlaveAddress),
                     initialSerialSettings);
                 CommandConsoleViewModel commandConsole = new(
-                    operationService,
+                    createdOperationService,
                     periodicSendService,
                     serialConnection,
                     dispatcher,
                     settings);
-                MonitorViewModel monitor = new(operationService, dispatcher);
+                MonitorViewModel monitor = new(createdOperationService, dispatcher);
                 ParametersViewModel parameters = new(
                     commandConsole,
                     serialConnection,
                     specialConfigurationService,
-                    operationService,
+                    createdOperationService,
                     dispatcher);
                 RegisterToolViewModel registerTool = new(
                     commandConsole,
                     serialConnection,
                     specialConfigurationService,
-                    operationService,
+                    createdOperationService,
                     dispatcher);
                 CommunicationLogViewModel communicationLog = new(
                     communicationLogService,
@@ -131,7 +137,7 @@ namespace CH32UpperComputer.App
                     registerTool,
                     communicationLog,
                     systemInfo,
-                    operationService,
+                    createdOperationService,
                     dispatcher);
                 MainWindow window = new(mainWindowViewModel);
                 MainWindow = window;
@@ -190,6 +196,11 @@ namespace CH32UpperComputer.App
                 await coordinator.WaitForBackgroundOperationsAsync(CancellationToken.None).ConfigureAwait(true);
             }
 
+            if (operationService is not null)
+            {
+                await operationService.WaitForOperationsAsync(CancellationToken.None).ConfigureAwait(true);
+            }
+
             communicationLogService?.FlushPendingPublication();
             viewModel?.Dispose();
 
@@ -202,7 +213,8 @@ namespace CH32UpperComputer.App
             {
                 await coordinator.DisposeAsync().ConfigureAwait(true);
             }
-            else if (transport is not null)
+
+            if (transport is not null)
             {
                 await transport.DisposeAsync().ConfigureAwait(true);
             }

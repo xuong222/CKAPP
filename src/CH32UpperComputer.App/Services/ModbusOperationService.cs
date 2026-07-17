@@ -70,6 +70,11 @@ namespace CH32UpperComputer.App.Services
         private readonly object metricsSyncRoot = new();
 
         /// <summary>
+        /// 保护活动应用操作计数和退出排空任务代次的一致性。
+        /// </summary>
+        private readonly object operationSyncRoot = new();
+
+        /// <summary>
         /// 所有请求共用的无队列 Modbus 事务协调器。
         /// </summary>
         private readonly ModbusTransactionCoordinator coordinator;
@@ -93,6 +98,16 @@ namespace CH32UpperComputer.App.Services
         /// 为耗时和日历日志提供统一时间源。
         /// </summary>
         private readonly TimeProvider timeProvider;
+
+        /// <summary>
+        /// 当前尚未完成日志、快照、统计和观察者发布的应用操作数量。
+        /// </summary>
+        private int activeOperationCount;
+
+        /// <summary>
+        /// 当前操作代次全部排空时完成的异步信号；初始状态已经完成。
+        /// </summary>
+        private TaskCompletionSource operationIdleSource = CreateCompletedSource();
 
         /// <summary>
         /// 当前已被接受请求数量。
@@ -196,22 +211,48 @@ namespace CH32UpperComputer.App.Services
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(request);
-            long startedTimestamp = timeProvider.GetTimestamp();
-            DateTimeOffset startedAt = timeProvider.GetUtcNow();
-            TransactionExecutionResult result = await coordinator.TryExecuteAsync(
-                request,
-                cancellationToken).ConfigureAwait(false);
+            EnterOperation();
 
-            if (!result.IsAccepted)
+            try
             {
-                InvokeObservers(OperationCompleted, result);
-                InvokeObservers(OperationRecorded, request, result);
+                long startedTimestamp = timeProvider.GetTimestamp();
+                DateTimeOffset startedAt = timeProvider.GetUtcNow();
+                TransactionExecutionResult result = await coordinator.TryExecuteAsync(
+                    request,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!result.IsAccepted)
+                {
+                    InvokeObservers(OperationCompleted, result);
+                    InvokeObservers(OperationRecorded, request, result);
+                    return result;
+                }
+
+                TimeSpan elapsed = timeProvider.GetElapsedTime(startedTimestamp);
+                RecordAcceptedResult(request, result, startedAt, elapsed);
                 return result;
             }
+            finally
+            {
+                LeaveOperation();
+            }
+        }
 
-            TimeSpan elapsed = timeProvider.GetElapsedTime(startedTimestamp);
-            RecordAcceptedResult(request, result, startedAt, elapsed);
-            return result;
+        /// <summary>
+        /// 等待所有已经进入应用操作服务的请求完成日志、快照、统计和观察者发布。
+        /// </summary>
+        /// <param name="cancellationToken">取消调用方等待，但不取消正在收敛的通信操作。</param>
+        /// <returns>当前活动操作计数归零后的任务。</returns>
+        public async ValueTask WaitForOperationsAsync(CancellationToken cancellationToken)
+        {
+            Task completion;
+
+            lock (operationSyncRoot)
+            {
+                completion = operationIdleSource.Task;
+            }
+
+            await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -479,6 +520,60 @@ namespace CH32UpperComputer.App.Services
                     // 单个界面观察者错误不得破坏通信事务完成路径。
                 }
             }
+        }
+
+        /// <summary>
+        /// 进入一次包含协调器执行及全部应用副作用的操作生命周期。
+        /// </summary>
+        private void EnterOperation()
+        {
+            lock (operationSyncRoot)
+            {
+                if (activeOperationCount == 0)
+                {
+                    operationIdleSource = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+
+                activeOperationCount = checked(activeOperationCount + 1);
+            }
+        }
+
+        /// <summary>
+        /// 退出一次应用操作，并在最后一项退出时完成当前排空代次。
+        /// </summary>
+        private void LeaveOperation()
+        {
+            TaskCompletionSource? completedSource = null;
+
+            lock (operationSyncRoot)
+            {
+                activeOperationCount--;
+
+                if (activeOperationCount < 0)
+                {
+                    throw new InvalidOperationException("应用操作计数不能为负数。");
+                }
+
+                if (activeOperationCount == 0)
+                {
+                    completedSource = operationIdleSource;
+                }
+            }
+
+            completedSource?.TrySetResult();
+        }
+
+        /// <summary>
+        /// 创建一个已经完成的排空信号，表示服务初始化时没有活动操作。
+        /// </summary>
+        /// <returns>已经进入 RanToCompletion 状态的新完成源。</returns>
+        private static TaskCompletionSource CreateCompletedSource()
+        {
+            TaskCompletionSource source = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            source.SetResult();
+            return source;
         }
     }
 }

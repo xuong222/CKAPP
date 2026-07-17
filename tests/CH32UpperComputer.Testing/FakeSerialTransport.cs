@@ -67,6 +67,11 @@ namespace CH32UpperComputer.Testing
         private IOException? nextWriteException;
 
         /// <summary>
+        /// 下一次物理写入需要等待的可控暂停门；被写操作领取后立即清空。
+        /// </summary>
+        private FakeWritePause? nextWritePause;
+
+        /// <summary>
         /// 指示传输对象是否已经永久释放。
         /// </summary>
         private bool isDisposed;
@@ -196,10 +201,10 @@ namespace CH32UpperComputer.Testing
         /// </summary>
         /// <param name="frame">待记录的非空发送帧。</param>
         /// <param name="cancellationToken">在状态变更前取消写入操作的令牌。</param>
-        /// <returns>同步完成的值任务。</returns>
+        /// <returns>无暂停时同步完成；配置暂停时在测试释放门后异步完成的值任务。</returns>
         /// <exception cref="ArgumentException"><paramref name="frame"/> 为空时抛出。</exception>
         /// <exception cref="InvalidOperationException">当前没有打开会话时抛出。</exception>
-        public ValueTask WriteAsync(
+        public async ValueTask WriteAsync(
             ReadOnlyMemory<byte> frame,
             CancellationToken cancellationToken)
         {
@@ -210,17 +215,38 @@ namespace CH32UpperComputer.Testing
 
             cancellationToken.ThrowIfCancellationRequested();
             byte[] frameCopy = frame.ToArray();
+            Session session;
+            FakeWritePause? writePause;
 
             lock (syncRoot)
             {
                 ThrowIfDisposedUnderLock();
-                EnsureOpenUnderLock();
+                session = EnsureOpenUnderLock();
 
                 if (nextWriteException is not null)
                 {
                     IOException exception = nextWriteException;
                     nextWriteException = null;
                     throw exception;
+                }
+
+                writePause = nextWritePause;
+                nextWritePause = null;
+            }
+
+            if (writePause is not null)
+            {
+                writePause.SignalEntered();
+                await writePause.WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            lock (syncRoot)
+            {
+                ThrowIfDisposedUnderLock();
+
+                if (!ReferenceEquals(currentSession, session))
+                {
+                    throw new IOException("模拟写入暂停期间串口会话已经失效。");
                 }
 
                 if (writtenFrames.Count == writeHistoryCapacity)
@@ -230,8 +256,6 @@ namespace CH32UpperComputer.Testing
 
                 writtenFrames.Add(frameCopy);
             }
-
-            return ValueTask.CompletedTask;
         }
 
         /// <summary>
@@ -326,6 +350,62 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
+        /// 使用调用方指定的日历时间和单调时间戳注入接收块，用于精确验证截止边界。
+        /// </summary>
+        /// <param name="data">待注入的非空线路字节块。</param>
+        /// <param name="arrivedAtUtc">块进入传输层时的明确 UTC 日历时间。</param>
+        /// <param name="monotonicTimestamp">由同一测试时间基准定义的非负单调时间戳。</param>
+        /// <param name="cancellationToken">取消容量等待的令牌。</param>
+        /// <returns>注入成功后完成的值任务。</returns>
+        /// <exception cref="ArgumentException"><paramref name="data"/> 为空时抛出。</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="monotonicTimestamp"/> 为负数时抛出。</exception>
+        /// <exception cref="InvalidOperationException">当前没有打开会话时抛出。</exception>
+        public async ValueTask InjectReceiveAtAsync(
+            ReadOnlyMemory<byte> data,
+            DateTimeOffset arrivedAtUtc,
+            long monotonicTimestamp,
+            CancellationToken cancellationToken = default)
+        {
+            if (data.IsEmpty)
+            {
+                throw new ArgumentException("注入的接收块不能为空。", nameof(data));
+            }
+
+            if (monotonicTimestamp < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(monotonicTimestamp));
+            }
+
+            await injectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                SerialReceiveChunk chunk;
+                ChannelWriter<SerialReceiveChunk> writer;
+
+                lock (syncRoot)
+                {
+                    ThrowIfDisposedUnderLock();
+                    Session session = EnsureOpenUnderLock();
+                    long sequence = checked(++session.ReceiveSequence);
+                    chunk = new SerialReceiveChunk(
+                        data.Span,
+                        session.Generation,
+                        sequence,
+                        arrivedAtUtc,
+                        monotonicTimestamp);
+                    writer = session.ReceiveChannel.Writer;
+                }
+
+                await writer.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                injectGate.Release();
+            }
+        }
+
+        /// <summary>
         /// 设置下一次写操作抛出的一次性 I/O 异常。
         /// </summary>
         /// <param name="exception">下一次写操作需要原样抛出的异常。</param>
@@ -337,6 +417,28 @@ namespace CH32UpperComputer.Testing
             {
                 ThrowIfDisposedUnderLock();
                 nextWriteException = exception;
+            }
+        }
+
+        /// <summary>
+        /// 让下一次写入在进入物理写阶段后暂停，供测试精确制造 Sending 状态接收竞态。
+        /// </summary>
+        /// <returns>可等待写入进入并由测试显式释放的单次暂停门。</returns>
+        /// <exception cref="InvalidOperationException">当前没有打开会话，或已经存在尚未被下一次写入领取的暂停门时抛出。</exception>
+        public FakeWritePause PauseNextWrite()
+        {
+            lock (syncRoot)
+            {
+                ThrowIfDisposedUnderLock();
+                EnsureOpenUnderLock();
+
+                if (nextWritePause is not null)
+                {
+                    throw new InvalidOperationException("下一次写入已经配置暂停门。");
+                }
+
+                nextWritePause = new FakeWritePause();
+                return nextWritePause;
             }
         }
 
@@ -467,6 +569,55 @@ namespace CH32UpperComputer.Testing
             /// 获取或设置最近分配的会话内接收序号。
             /// </summary>
             internal long ReceiveSequence { get; set; }
+        }
+    }
+
+    /// <summary>
+    /// 控制 FakeSerialTransport 下一次写入的进入与释放时刻。
+    /// </summary>
+    public sealed class FakeWritePause
+    {
+        /// <summary>
+        /// 写入进入暂停点时完成的异步信号。
+        /// </summary>
+        private readonly TaskCompletionSource enteredSource = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// 测试释放写入时完成的异步信号。
+        /// </summary>
+        private readonly TaskCompletionSource releaseSource = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// 获取下一次写入已经进入暂停点的任务。
+        /// </summary>
+        public Task Entered => enteredSource.Task;
+
+        /// <summary>
+        /// 幂等释放已经进入暂停点的写入。
+        /// </summary>
+        public void Release()
+        {
+            releaseSource.TrySetResult();
+        }
+
+        /// <summary>
+        /// 由 Fake 写入路径发布已经进入暂停点。
+        /// </summary>
+        internal void SignalEntered()
+        {
+            enteredSource.TrySetResult();
+        }
+
+        /// <summary>
+        /// 等待测试释放暂停点或调用方取消写入。
+        /// </summary>
+        /// <param name="cancellationToken">取消当前写入等待的令牌。</param>
+        /// <returns>暂停门释放后完成的任务。</returns>
+        internal async Task WaitForReleaseAsync(CancellationToken cancellationToken)
+        {
+            await releaseSource.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 }

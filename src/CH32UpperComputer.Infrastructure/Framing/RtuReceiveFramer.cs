@@ -463,31 +463,36 @@ namespace CH32UpperComputer.Infrastructure.Framing
         }
 
         /// <summary>
-        /// 从未知结构缓冲头扫描最早的有效 Modbus CRC 边界。
+        /// 检查未知结构缓冲头是否恰好在本次新增字节处形成有效 Modbus CRC 边界。
+        /// 本方法由逐字节追加路径调用，较短候选已经在其自身末字节到达时检查过，
+        /// 因此不得重复扫描全部历史长度，否则 4096 字节噪声会退化为高开销重复计算。
         /// </summary>
-        /// <returns>最早有效边界长度；尚无有效边界时为零。</returns>
+        /// <returns>当前完整缓冲长度是有效边界时返回该长度；否则返回零。</returns>
         private int FindEarliestCrcBoundaryUnderLock()
         {
-            int maximumCandidateLength = Math.Min(bufferedByteCount, options.MaximumFrameBytes);
-
-            for (int candidateLength = 4; candidateLength <= maximumCandidateLength; candidateLength++)
+            if (bufferedByteCount is < 4 || bufferedByteCount > options.MaximumFrameBytes)
             {
-                if (ModbusCrc16.IsValid(receiveBuffer.AsSpan(0, candidateLength)))
-                {
-                    return candidateLength;
-                }
+                return 0;
             }
 
-            return 0;
+            return ModbusCrc16.IsValid(receiveBuffer.AsSpan(0, bufferedByteCount))
+                ? bufferedByteCount
+                : 0;
         }
 
         /// <summary>
-        /// 在前导未知噪声之后寻找一个结构完整且 CRC 有效的已知响应帧。
+        /// 在前导未知噪声之后寻找一项恰好由本次新增字节补完整且 CRC 有效的已知响应帧。
+        /// 已经在更早字节处完整但 CRC 无效的候选不会因追加尾部字节而改变，故只检查
+        /// 以当前缓冲末尾为帧末尾、且位于最大帧长度窗口内的候选。
         /// </summary>
         /// <returns>已知帧的缓冲偏移；不存在完整合法帧时为零。</returns>
         private int FindLaterKnownValidFrameOffsetUnderLock()
         {
-            for (int offset = 1; offset < bufferedByteCount; offset++)
+            int earliestPossibleOffset = Math.Max(
+                1,
+                bufferedByteCount - options.MaximumFrameBytes);
+
+            for (int offset = earliestPossibleOffset; offset < bufferedByteCount; offset++)
             {
                 int availableLength = bufferedByteCount - offset;
                 ExpectedLengthResult expected = GetExpectedLength(
@@ -496,7 +501,7 @@ namespace CH32UpperComputer.Infrastructure.Framing
                     availableLength);
 
                 if (expected.Status == ExpectedLengthStatus.Known &&
-                    availableLength >= expected.Length &&
+                    availableLength == expected.Length &&
                     ModbusCrc16.IsValid(receiveBuffer.AsSpan(offset, expected.Length)))
                 {
                     return offset;

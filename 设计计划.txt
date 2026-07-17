@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～9 已完成；下一完整功能为“定时发送与安全配置流程”Task 10～11，完成前不做中间验证
+implementation_status = Task 1～12 已完成；下一完整功能为“数据解析、交互与界面显示”Task 13～15，完成完整功能后再集中验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1432,43 +1432,45 @@ Run: `git commit -m "feat(infra): coordinate bounded Modbus transactions"`
 - Create: `src\CH32UpperComputer.Infrastructure\Transactions\PeriodicSendService.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Transactions\PeriodicSendServiceTests.cs`
 
-- [ ] **Step 1: 写默认关闭与首次间隔失败测试**
+- [x] **Step 1: 写默认关闭与首次间隔失败测试**
 
 连接后以及仅配置指令/间隔后均为 0 写入；只有调用 Start 后才建立调度。明确行为：Start 后先等待一个完整间隔，再尝试首次发送，避免启用瞬间产生意外写操作。
 
-- [ ] **Step 2: 运行并确认服务尚不存在**
+- [x] **Step 2: 运行并确认服务尚不存在**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~PeriodicSendServiceTests`
 Expected: FAIL，PeriodicSendService 未定义。
 
-- [ ] **Step 3: 写纯 fixed-delay 失败测试**
+- [x] **Step 3: 写纯 fixed-delay 失败测试**
 
 事务耗时大于间隔时不产生 tick、skip、coalesce 或追赶；从该事务最终完成时刻起再等待完整间隔。任何时刻最多一个定时流程。
 
-- [ ] **Step 4: 写停止边界失败测试**
+- [x] **Step 4: 写停止边界失败测试**
 
 分别在等待中、计时器刚到期、占用协调器前、写串口前调用 Stop；递增 ScheduleGeneration 并取消后不得出现新写入。已开始事务可完成，但不得安排下一次。
 
-- [ ] **Step 5: 写 Busy 背压失败测试**
+- [x] **Step 5: 写 Busy 背压失败测试**
 
 间隔到期时手动事务活动，定时尝试立即 Busy、不排队；从 Busy 结果起再等待完整间隔。停止后旧 generation 即使继续执行也不得写出。只有 Succeeded/RawCaptured 才安排正常下一次，Busy 只延后；TimedOut、ModbusException、WriteFailed、Disconnected、ReceiveOverflow、Cancelled 或 ApplicationStopping 必须立即 Stop、递增 generation 且不自动重试。串口在间隔等待期意外断开也必须停止。
 
-- [ ] **Step 6: 运行并确认 fixed-delay/停止/Busy 行为失败**
+- [x] **Step 6: 运行并确认 fixed-delay/停止/Busy 行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~PeriodicSendServiceTests`
 Expected: FAIL，新增调度状态行为尚未实现。
 
-- [ ] **Step 7: 实现并使用可控时间**
+- [x] **Step 7: 实现并使用可控时间**
 
 所有等待使用 `Task.Delay(interval, timeProvider, cancellationToken)` 或等价 TimeProvider 定时器；生产传入 TimeProvider.System，测试只推进 ManualTimeProvider。调度循环对 outcome 使用显式白名单：Succeeded/RawCaptured 继续、Busy 延后、其余终态停止；传输断线通知与当前等待竞争同一 Stop 代次门。
 
-- [ ] **Step 8: 运行测试并提交**
+- [x] **Step 8: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~PeriodicSendServiceTests`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Transactions\PeriodicSendService.cs tests\CH32UpperComputer.Infrastructure.Tests\Transactions\PeriodicSendServiceTests.cs`
 Run: `git commit -m "feat(infra): add non-accumulating periodic sends"`
+
+**Execution Record (2026-07-17):** 完成默认关闭、首次完整间隔、纯 fixed-delay、Busy 不排队、停止代次门及终态停止策略。定时计划在协调器取得活动门后、物理写串口前仍通过同一调度代次锁复核，解决“停止恰好发生在准备写入时”的竞态；连接和配置本身均不会启动定时发送。
 
 ### Task 11: 地址、波特率、恢复出厂和 0xFE 专用流程（TDD）
 
@@ -1477,38 +1479,40 @@ Run: `git commit -m "feat(infra): add non-accumulating periodic sends"`
 - Create: `src\CH32UpperComputer.Infrastructure\Transactions\ConfigurationChangeResult.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Transactions\SpecialConfigurationServiceTests.cs`
 
-- [ ] **Step 1: 写地址修改失败测试**
+- [x] **Step 1: 写地址修改失败测试**
 
 旧地址下 0x06 完整回显成功后才更新本地地址；响应丢失但模拟设备实际切换时返回 ConfigurationUncertain，提供旧/新配置恢复选项，不猜测。
 
-- [ ] **Step 2: 写波特率和恢复出厂失败测试**
+- [x] **Step 2: 写波特率和恢复出厂失败测试**
 
 波特率只在旧波特率回显后 Close 并以新波特率 Open；恢复出厂回显后使用地址 1、9600-8-N-1。响应丢失都进入不确定状态。
 
-- [ ] **Step 3: 写定时关闭不恢复失败测试**
+- [x] **Step 3: 写定时关闭不恢复失败测试**
 
 任一专用流程开始时 Stop 定时发送；成功、失败、ConfigurationUncertain 和重新开口后都保持 Off，只有用户再次 Start 才恢复。
 
-- [ ] **Step 4: 写 0xFE 风险与匹配失败测试**
+- [x] **Step 4: 写 0xFE 风险与匹配失败测试**
 
 命令模型必须携带固定文案“未知地址查询仅适用于总线上只有一个设备的情况；多设备同时应答会产生总线冲突。”；只有真实地址 1..64 且寄存器值等于地址的响应成功，不把 0xFE 保存为设备地址。
 
-- [ ] **Step 5: 运行并确认专用流程测试失败**
+- [x] **Step 5: 运行并确认专用流程测试失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~SpecialConfigurationServiceTests`
 Expected: FAIL，SpecialConfigurationService 未定义或目标行为缺失。
 
-- [ ] **Step 6: 实现独占流程并运行测试**
+- [x] **Step 6: 实现独占流程并运行测试**
 
 专用服务仍通过同一个无队列协调器；Busy 时拒绝，不绕过活动门。原始调试直接写这些寄存器不触发自动切换，只记风险日志。
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~SpecialConfigurationServiceTests`
 Expected: PASS，0 failed。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Transactions tests\CH32UpperComputer.Infrastructure.Tests\Transactions`
 Run: `git commit -m "feat(infra): add safe device configuration workflows"`
+
+**Execution Record (2026-07-17):** 地址、波特率、恢复出厂和 0xFE 查询均使用独立安全流程；流程开始即停止定时发送且不自动恢复。地址/波特率回显丢失返回 ConfigurationUncertain，不猜测设备状态；成功修改波特率后重开串口，恢复出厂后切换为地址 1、9600-8-N-1。0xFE 查询固定显示单设备风险文案，只接受真实地址 1～64 且寄存器值匹配的响应。Task 10～11 实现提交 `996b516`。
 
 ### Task 12: 双容量通信日志与 UTF-8 设置（TDD）
 
@@ -1521,43 +1525,45 @@ Run: `git commit -m "feat(infra): add safe device configuration workflows"`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Logging\CommunicationLogServiceTests.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Settings\JsonSettingsStoreTests.cs`
 
-- [ ] **Step 1: 写日志容量失败测试**
+- [x] **Step 1: 写日志容量失败测试**
 
 加入 5001 条后数据缓存恰为 5000；实时可视投影恰为 750；每条保存 TransactionId、方向、时间、状态、完整 raw bytes 和格式化摘要。不得每个字节创建记录。
 
-- [ ] **Step 2: 写批量和导出失败测试**
+- [x] **Step 2: 写批量和导出失败测试**
 
 高速追加时按最多 50 项或 50 ms 批量发布；筛选不破坏原缓存；导出先取不可变快照，再在线程池使用 `new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)` 写 UTF-8 with BOM，导出期间通信追加继续。测试必须断言文件前三字节为 EF BB BF 且中文可回读。
 
-- [ ] **Step 3: 运行并确认日志行为失败**
+- [x] **Step 3: 运行并确认日志行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~CommunicationLogServiceTests`
 Expected: FAIL，CommunicationLogService 未定义。
 
-- [ ] **Step 4: 实现日志服务并验证压力**
+- [x] **Step 4: 实现日志服务并验证压力**
 
 避免 5000 个复杂气泡控件；服务只产出轻量记录，UI 投影容量独立裁剪。
 
-- [ ] **Step 5: 写设置三路径失败测试**
+- [x] **Step 5: 写设置三路径失败测试**
 
 文件缺失返回默认值；合法文件往返保持中文和串口设置；损坏 JSON 重命名为带时间戳的 `.corrupt` 并返回默认值，不崩溃。
 
-- [ ] **Step 6: 运行并确认设置行为失败**
+- [x] **Step 6: 运行并确认设置行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~JsonSettingsStoreTests`
 Expected: FAIL，JsonSettingsStore 未定义。
 
-- [ ] **Step 7: 实现原子设置保存**
+- [x] **Step 7: 实现原子设置保存**
 
 先写同目录临时 UTF-8 文件，再 Replace/Move；只保存非敏感偏好，`automatic_send_on_connect` 固定 false，定时启用状态不持久化为 true。
 
-- [ ] **Step 8: 运行测试并提交**
+- [x] **Step 8: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter "FullyQualifiedName~Logging|FullyQualifiedName~Settings"`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Logging src\CH32UpperComputer.Infrastructure\Settings tests\CH32UpperComputer.Infrastructure.Tests\Logging tests\CH32UpperComputer.Infrastructure.Tests\Settings`
 Run: `git commit -m "feat(infra): add bounded logs and UTF-8 settings"`
+
+**Execution Record (2026-07-17):** 通信日志缓存固定 5000 条、实时投影固定 750 条，按最多 50 条或 50 ms 批量发布；筛选非破坏，导出先取得不可变快照并在线程池写 UTF-8 BOM CSV。设置文件采用同目录临时文件原子替换，缺失时使用默认值，损坏或非法内容隔离为 `.corrupt`；连接自动发送与定时启用状态始终保存为 false，中文以可读 UTF-8 写入。遵循用户最新验证节奏，在 Task 10～12 完整功能全部实现后统一验证：Infrastructure 105/105 通过，全解决方案 Debug build 0 warning/0 error，format、diff、UTF-8 BOM 和 CRLF 检查均通过；实现提交 `5fdd6b4`。
 
 ### Task 13: CommunityToolkit.Mvvm 应用壳与忙状态（TDD）
 

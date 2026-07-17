@@ -362,7 +362,7 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 创建右侧单列常用指令，每次点击都使用界面当前从站地址重新构建 CRC。
+        /// 创建右侧单列常用指令，每次点击都使用界面当前从站地址重新构建 CRC 并直接发送。
         /// </summary>
         /// <returns>固定业务顺序的常用指令数组。</returns>
         private CommonCommandItemViewModel[] CreateCommonCommands()
@@ -372,24 +372,70 @@ namespace CH32UpperComputer.App.ViewModels
                 new CommonCommandItemViewModel(
                     "读取监测数据",
                     "40003～40010",
-                    () => SetInput(CreateMonitorReadRequest())),
+                    () => SendCommonCommandAsync(CreateMonitorReadRequest),
+                    CanSendCommonCommand),
                 new CommonCommandItemViewModel(
                     "读取全部寄存器",
                     "40001～40036",
-                    () => SetInput(ModbusRequestFactory.CreateReadHoldingRegisters(CurrentSlaveAddress, 0x0000, 36))),
+                    () => SendCommonCommandAsync(
+                        () => ModbusRequestFactory.CreateReadHoldingRegisters(
+                            CurrentSlaveAddress,
+                            0x0000,
+                            36)),
+                    CanSendCommonCommand),
                 new CommonCommandItemViewModel(
                     "读取报警参数",
                     "40011～40023",
-                    () => SetInput(ModbusRequestFactory.CreateReadHoldingRegisters(CurrentSlaveAddress, 0x000A, 13))),
+                    () => SendCommonCommandAsync(
+                        () => ModbusRequestFactory.CreateReadHoldingRegisters(
+                            CurrentSlaveAddress,
+                            0x000A,
+                            13)),
+                    CanSendCommonCommand),
                 new CommonCommandItemViewModel(
                     "读取补偿参数",
                     "40030～40035",
-                    () => SetInput(ModbusRequestFactory.CreateReadHoldingRegisters(CurrentSlaveAddress, 0x001D, 6))),
+                    () => SendCommonCommandAsync(
+                        () => ModbusRequestFactory.CreateReadHoldingRegisters(
+                            CurrentSlaveAddress,
+                            0x001D,
+                            6)),
+                    CanSendCommonCommand),
                 new CommonCommandItemViewModel(
                     "未知地址查询",
                     "仅限总线上一个设备",
-                    () => SetInput(ModbusRequestFactory.CreateUnknownAddressQuery())),
+                    () => SendCommonCommandAsync(ModbusRequestFactory.CreateUnknownAddressQuery),
+                    CanSendCommonCommand),
             ];
+        }
+
+        /// <summary>
+        /// 将常用模板显示到输入框，并通过与手动发送相同的无队列协调器直接完成一次标准事务。
+        /// </summary>
+        /// <param name="requestFactory">在点击瞬间使用当前从站地址创建标准请求的函数。</param>
+        /// <returns>请求被拒绝或到达唯一事务终态后完成的任务。</returns>
+        private async Task SendCommonCommandAsync(Func<ModbusRequest> requestFactory)
+        {
+            ArgumentNullException.ThrowIfNull(requestFactory);
+
+            try
+            {
+                ModbusRequest request = requestFactory();
+                InputText = FormatRequest(request);
+                StatusMessage = $"正在发送常用指令 0x{(byte)request.FunctionCode:X2}。";
+                TransactionExecutionResult result = await operationService.ExecuteAsync(
+                    CreateStandardTransaction(request),
+                    CancellationToken.None).ConfigureAwait(true);
+                StatusMessage = result.Message;
+            }
+            catch (Exception exception)
+            {
+                StatusMessage = exception.Message;
+            }
+            finally
+            {
+                NotifyCommandStates();
+            }
         }
 
         /// <summary>
@@ -418,13 +464,13 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 将一个标准请求完整帧格式化并填入收发输入框。
+        /// 获取当前状态是否允许直接发送常用指令。
         /// </summary>
-        /// <param name="request">由统一工厂构建的标准请求。</param>
-        private void SetInput(ModbusRequest request)
+        /// <returns>已连接且无活动事务时返回真。</returns>
+        private bool CanSendCommonCommand()
         {
-            InputText = FormatRequest(request);
-            StatusMessage = $"已载入 0x{(byte)request.FunctionCode:X2} 常用指令，等待手动发送。";
+            return serialConnection.IsConnected &&
+                !serialConnection.IsTransactionBusy;
         }
 
         /// <summary>
@@ -552,13 +598,18 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 通知发送和定时控制命令重新计算可执行性。
+        /// 通知发送、常用指令和定时控制命令重新计算可执行性。
         /// </summary>
         private void NotifyCommandStates()
         {
             SendCommand.NotifyCanExecuteChanged();
             StartPeriodicCommand.NotifyCanExecuteChanged();
             StopPeriodicCommand.NotifyCanExecuteChanged();
+
+            foreach (CommonCommandItemViewModel commonCommand in CommonCommands)
+            {
+                commonCommand.NotifyCanExecuteChanged();
+            }
         }
 
         /// <summary>

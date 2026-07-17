@@ -1,5 +1,7 @@
 ﻿using CH32UpperComputer.App.Tests.TestSupport;
+using CH32UpperComputer.Core.Protocol;
 using CH32UpperComputer.Infrastructure.Logging;
+using CommunityToolkit.Mvvm.Input;
 
 namespace CH32UpperComputer.App.Tests.ViewModels
 {
@@ -61,6 +63,40 @@ namespace CH32UpperComputer.App.Tests.ViewModels
                 Assert.That(logs.Count(entry => entry.Direction == CommunicationDirection.Transmit), Is.EqualTo(1));
                 Assert.That(logs.Count(entry => entry.Direction == CommunicationDirection.Receive), Is.EqualTo(1));
                 Assert.That(logs.Where(entry => entry.TransactionId.HasValue).Select(entry => entry.TransactionId).Distinct().Count(), Is.EqualTo(1));
+            }));
+        }
+
+        /// <summary>
+        /// 验证单列常用指令按钮会使用当前从站地址直接发送，不要求用户再点击一次发送按钮。
+        /// </summary>
+        [Test]
+        public async Task CommonMonitorCommand_ClickOnce_SendsCurrentAddressRequest()
+        {
+            await using AppViewModelHarness harness = AppViewModelHarness.Create();
+            await harness.ConnectAsync();
+            ModbusRequest expectedRequest = ModbusRequestFactory.CreateReadHoldingRegisters(
+                1,
+                0x0002,
+                8);
+
+            harness.CommandConsole.CommonCommands[0].SelectCommand.Execute(null);
+            await harness.RespondToWriteAsync(1);
+            IAsyncRelayCommand? asynchronousCommand =
+                harness.CommandConsole.CommonCommands[0].SelectCommand as IAsyncRelayCommand;
+
+            Assert.That(
+                asynchronousCommand,
+                Is.Not.Null,
+                "常用指令必须等待其一键发送事务完成并正确管理忙状态。");
+            await asynchronousCommand!.ExecutionTask!.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.Multiple((Action)(() =>
+            {
+                Assert.That(
+                    harness.Transport.WrittenFrames[0].ToArray(),
+                    Is.EqualTo(expectedRequest.RawFrame.ToArray()));
+                Assert.That(harness.CommandConsole.SendCount, Is.EqualTo(1));
+                Assert.That(harness.CommandConsole.SuccessCount, Is.EqualTo(1));
             }));
         }
     }

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～16 已完成；Task 17 的文档、Release 发布和开发机烟雾检查已完成，无 .NET 8 Desktop Runtime 的干净环境证据因当前 Windows Home 无 Sandbox 仍待外部环境；Task 18 最终本地审查进行中
+implementation_status = Task 1～18 的开发、本地审查、Release 发布和开发机烟雾检查已完成；无 .NET 8 Desktop Runtime 的干净环境证据因当前 Windows Home 无 Sandbox 仍待外部环境，真实设备硬件验收待用户提供目标设备与端口
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -731,26 +731,27 @@ dotnet publish src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Release
 
 只有同时满足以下条件，项目才可声明完成：
 
-[ ] 本文件中的必需功能均已实现，无未完成占位。
-[ ] 连接后默认无自动发送，定时发送只能手动开启。
-[ ] 40001～40036 每项 RawEncoding、原始范围、权限、缩放、精度和单位与当前固件一致。
-[ ] 0x03、0x06、0x10、0xFE、CRC 和异常帧测试全部通过。
-[ ] 标准结构组帧、原始静默结束、分段帧、粘连帧、缓存溢出和迟到响应测试全部通过。
-[ ] 第五版 UI 的关键视觉要求全部满足。
-[ ] 六项数据卡与具体报警项显示正确。
-[ ] 原始收发、常用指令、手动发送、自动 CRC、定时发送均可用。
-[ ] 串口拔出、超时、迟到响应、CRC 错误、粘包、分段和异常响应不会导致崩溃或错误覆盖数据。
-[ ] System.IO.Ports、CommunityToolkit.Mvvm、NUnit、测试适配器和测试宿主均使用第 6.1 节固定版本，
+[x] 本文件中的必需功能均已实现，无未完成占位。
+[x] 连接后默认无自动发送，定时发送只能手动开启。
+[x] 40001～40036 每项 RawEncoding、原始范围、权限、缩放、精度和单位与当前固件一致。
+[x] 0x03、0x06、0x10、0xFE、CRC 和异常帧测试全部通过。
+[x] 标准结构组帧、原始静默结束、分段帧、粘连帧、缓存溢出和迟到响应测试全部通过。
+[x] 第五版 UI 的关键视觉要求全部满足。
+[x] 六项数据卡与具体报警项显示正确。
+[x] 原始收发、常用指令一键发送、手动发送、自动 CRC、定时发送均可用。
+[x] 串口拔出、超时、迟到响应、CRC 错误、粘包、分段和异常响应不会导致崩溃或错误覆盖数据。
+[x] System.IO.Ports、CommunityToolkit.Mvvm、NUnit、测试适配器和测试宿主均使用第 6.1 节固定版本，
     packages.lock.json 已提交且 locked-mode 恢复成功。
-[ ] SerialPortTransport 生产接收路径只使用一个 BaseStream.ReadAsync 循环；取消、关闭和拔出均能退出。
-[ ] 所有事务终态只经原子 TryComplete 入口；边界竞态不会重复完成、更新 UI 或释放资源。
-[ ] Busy 期间重复点击不会排队或写串口，发送类命令正确禁用并显示明确提示。
-[ ] 所有新增函数和参数均有中文 XML 注释，代码采用 Allman 风格。
-[ ] dotnet test 0 失败。
-[ ] Release 构建成功。
-[ ] Windows x64 自包含单文件发布成功。
-[ ] 最终 EXE、源码、测试、使用说明和寄存器说明均位于 D:\CH32\SHANGWEJI。
-[ ] 中文界面、配置和导出日志均无乱码。
+[x] SerialPortTransport 生产接收路径只使用一个 BaseStream.ReadAsync 循环；取消、关闭和拔出均能退出。
+[x] 所有事务终态只经原子 TryComplete 入口；边界竞态不会重复完成、更新 UI 或释放资源。
+[x] Busy 期间重复点击不会排队或写串口，发送类命令正确禁用并显示明确提示。
+[x] 所有新增函数和参数均有中文 XML 注释，代码采用 Allman 风格。
+[x] dotnet test 0 失败。
+[x] Release 构建成功。
+[x] Windows x64 自包含单文件发布成功。
+[ ] 最终 EXE 已在未安装 .NET 8 Desktop Runtime 的 Windows x64 环境中启动。
+[x] 最终 EXE、源码、测试、使用说明和寄存器说明均位于 D:\CH32\SHANGWEJI。
+[x] 中文界面、配置和导出日志均无乱码。
 
 -------------------------------------------------------------------------------
 12. 需在实施期间保持的关键不变量
@@ -1845,11 +1846,11 @@ Run: `git commit -m "docs: add usage guide and Windows release pipeline"`
 - Verify: `artifacts\publish\win-x64\CH32UpperComputer.App.exe`
 - Verify: `artifacts\screenshots\dashboard-v5.png`
 
-- [ ] **Step 1: 执行格式和静态自查**
+- [x] **Step 1: 执行格式和静态自查**
 
 检查所有 C# 文件为 Allman 风格、公开/内部生产类与函数/参数具中文 XML 注释、无 TODO/FIXME/NotImplementedException、无 DataReceived/BytesToRead/SerialPort.Read、无 DateTime.Now/不可控 Task.Delay、无无界请求队列。
 
-- [ ] **Step 2: 执行锁定恢复和完整测试**
+- [x] **Step 2: 执行锁定恢复和完整测试**
 
 Run: `dotnet restore --locked-mode`
 Expected: PASS，锁文件不变化。
@@ -1868,26 +1869,28 @@ Expected: 单文件 EXE 生成且脚本返回 0。
 Run: `powershell -ExecutionPolicy Bypass -File scripts\verify-self-contained-sandbox.ps1 -Executable artifacts\publish\win-x64\CH32UpperComputer.App.exe`
 Expected: `artifacts\validation\SELF_CONTAINED_PASS.txt` 存在；若 Sandbox/干净 VM 不可用，本项保持未完成。
 
-- [ ] **Step 4: 执行 UI/中文/容量人工验收**
+- [x] **Step 4: 执行 UI/中文/容量人工验收**
 
 核对第五版两行三列卡片、标题字号、报警栏、细上边框、紧凑收发区、单列常用指令、无趋势曲线；制造 >5000 日志确认缓存 5000/视图 750、滚动流畅、导出不阻塞、中文无乱码。
 
-- [ ] **Step 5: 执行硬件验收或明确外部阻塞**
+- [x] **Step 5: 执行硬件验收或明确外部阻塞**
 
 若有真实设备：逐项验证 0x03、0x06、0x10、0xFE、地址切换、波特率切换、恢复出厂和拔线；若无设备，只把硬件验收项标记为“待真实设备”，不得伪称通过，但模拟测试、EXE 和其余交付照常完成。
 
-- [ ] **Step 6: 使用 @superpowers:requesting-code-review 审查**
+- [x] **Step 6: 使用 @superpowers:requesting-code-review 审查**
 
 审查重点：寄存器原始语义、帧长度、迟到响应、原子完成门、串口关闭、无队列背压、WPF 虚拟化和发布参数。修复任何 blocking 问题时先添加失败测试。
 
-- [ ] **Step 7: 使用 @superpowers:verification-before-completion 复核证据**
+- [x] **Step 7: 使用 @superpowers:verification-before-completion 复核证据**
 
 只有重新运行的命令输出证明测试/构建/发布成功后，才勾选第 11 节完成定义并报告完成；不得引用过期运行结果。
 
-- [ ] **Step 8: 提交最终交付状态**
+- [x] **Step 8: 提交最终交付状态**
 
 Run: `git add -A`
 Run: `git commit -m "release: complete CH32 Modbus upper computer"`
+
+**Execution Record (2026-07-17):** 以 `master...feature/upper-computer` 全部 135 个变更文件为审查范围，完成格式、Allman、中文 XML 注释、禁用 API、时间源、无请求队列、串口单读取循环、接收缓存、原子完成门、迟到响应、WPF 虚拟化、日志容量和发布参数静态审计。代码审查发现“常用指令”仍是载入后等待第二次点击，与“一键发送”需求不符；新增失败测试后确认旧实现 1 秒内没有串口写入，随后改为按当前从站地址生成帧、显示到输入框并直接通过共享无队列协调器发送，Busy 时按钮禁用。最终 locked-mode 恢复无变化；Release 测试 Core 119/119、Infrastructure 124/124、App 11/11，共 254/254；Release build 0 warning/0 error；发布目录仅含 `CH32UpperComputer.App.exe`，大小 72,027,575 bytes，SHA256 `F63B30A39D819D188290DE12030B836B4FC4629B2F98754606B92318ACA3691A`。最终 EXE 自渲染并以退出码 0 结束，视觉基线更新为未连接时常用指令正确禁用，截图 168,824 bytes，SHA256 `5187576F5F6068B9B74D51B5F4A47134BBFF15F8F1F3572F1731A6FECD9E70B6`，第五版布局和中文显示正常。当前主机没有 Windows Sandbox，因此 Step 3 和“无 .NET 8 Desktop Runtime 环境启动”完成项保持未勾选；检测到 COM1、COM50、COM51，但没有可确认的目标设备与端口，真实 0x03/0x06/0x10/0xFE、地址/波特率切换、恢复出厂和拔线验收明确待硬件，不伪称通过。除这两项外，审查未发现剩余可操作的 blocking 问题。
 
 15. 执行检查点
 --------------

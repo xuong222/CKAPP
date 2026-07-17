@@ -3,10 +3,152 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:CH32UpperComputer.App"
+        xmlns:views="clr-namespace:CH32UpperComputer.App.Views"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="CH32 工业监控上位机"
+        Width="1480"
+        Height="920"
+        MinWidth="1180"
+        MinHeight="720"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Brush.Window}">
+    <Grid Margin="20,16,20,18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="70" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Style="{StaticResource Text.PageTitle}" Text="CH32 工业监控上位机" />
+                <TextBlock Margin="0,5,0,0"
+                           Style="{StaticResource Text.Caption}"
+                           Text="Modbus-RTU · 单事务协调 · 连接后等待手动指令" />
+            </StackPanel>
+            <Border Grid.Column="1"
+                    Style="{StaticResource Card}"
+                    Padding="16,10"
+                    VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel Margin="0,0,20,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding PortStatus}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,20,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding BaudRateStatus}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,20,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="从站" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding SlaveAddressStatus}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,20,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="连接状态" />
+                        <TextBlock Foreground="{DynamicResource Brush.Normal}"
+                                   FontWeight="SemiBold"
+                                   Text="{Binding ConnectionStatus}" />
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="最近响应" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding LastResponseDurationText}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Expander Grid.Row="1"
+                  Margin="0,0,0,10"
+                  Foreground="{DynamicResource Brush.TextSecondary}"
+                  Header="串口与连接设置（展开）">
+            <Border Margin="0,8,0,0" Style="{StaticResource Card}" Padding="14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="115" />
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="95" />
+                        <ColumnDefinition Width="125" />
+                        <ColumnDefinition Width="125" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
+                        <ComboBox ItemsSource="{Binding SerialConnection.AvailablePorts}"
+                                  IsEditable="True"
+                                  Text="{Binding SerialConnection.PortName, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
+                        <ComboBox ItemsSource="{Binding SerialConnection.BaudRates}"
+                                  SelectedItem="{Binding SerialConnection.BaudRate}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="数据位" />
+                        <ComboBox ItemsSource="{Binding SerialConnection.DataBitOptions}"
+                                  SelectedItem="{Binding SerialConnection.DataBits}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="3" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="校验" />
+                        <ComboBox ItemsSource="{Binding SerialConnection.ParityOptions}"
+                                  SelectedItem="{Binding SerialConnection.Parity}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="4" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="停止位" />
+                        <ComboBox ItemsSource="{Binding SerialConnection.StopBitOptions}"
+                                  SelectedItem="{Binding SerialConnection.StopBits}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="5" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="从站地址" />
+                        <TextBox Text="{Binding SerialConnection.SlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="6" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="总超时 ms" />
+                        <TextBox Text="{Binding SerialConnection.ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="7" Margin="0,0,10,0">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="字节静默 ms" />
+                        <TextBox Text="{Binding SerialConnection.RawInterByteTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Bottom">
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding SerialConnection.RefreshPortsCommand}"
+                                Content="刷新串口" />
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding SerialConnection.ResetDefaultsCommand}"
+                                Content="恢复默认" />
+                        <Button Margin="0,0,8,0"
+                                Style="{StaticResource Button.Primary}"
+                                Command="{Binding SerialConnection.ConnectCommand}"
+                                Content="连接" />
+                        <Button Command="{Binding SerialConnection.DisconnectCommand}" Content="断开" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Expander>
+
+        <TabControl Grid.Row="2">
+            <TabItem Header="实时监控">
+                <views:MonitorView DataContext="{Binding}" />
+            </TabItem>
+            <TabItem Header="参数设置">
+                <views:ParametersView DataContext="{Binding Parameters}" />
+            </TabItem>
+            <TabItem Header="寄存器工具">
+                <views:RegisterToolView DataContext="{Binding RegisterTool}" />
+            </TabItem>
+            <TabItem Header="通信日志">
+                <views:CommunicationLogView DataContext="{Binding CommunicationLog}" />
+            </TabItem>
+            <TabItem Header="系统信息">
+                <views:SystemInfoView DataContext="{Binding SystemInfo}" />
+            </TabItem>
+        </TabControl>
     </Grid>
 </Window>

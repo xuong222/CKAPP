@@ -113,6 +113,38 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         }
 
         /// <summary>
+        /// 在没有专用流程活动时同步上位机已经选择或成功打开的本地地址与串口参数。
+        /// 本方法只更新软件配置，不写串口、不启动定时发送，也不代表设备参数已经被修改。
+        /// </summary>
+        /// <param name="slaveAddress">当前由用户明确选择或连接成功确认的普通从站地址。</param>
+        /// <param name="serialSettings">当前由用户明确选择或连接成功确认的完整串口参数。</param>
+        /// <exception cref="ArgumentNullException"><paramref name="serialSettings"/> 为空时抛出。</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="slaveAddress"/> 不在 1 至 64 时抛出。</exception>
+        /// <exception cref="InvalidOperationException">已有专用配置流程活动时抛出。</exception>
+        public void SynchronizeLocalConfiguration(
+            byte slaveAddress,
+            SerialSettings serialSettings)
+        {
+            ArgumentNullException.ThrowIfNull(serialSettings);
+
+            if (slaveAddress is < 1 or > 64)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(slaveAddress),
+                    slaveAddress,
+                    "普通 Modbus 从站地址必须位于 1 至 64。");
+            }
+
+            if (IsOperationBusy)
+            {
+                throw new InvalidOperationException("专用配置流程活动时不能覆盖本地连接配置。");
+            }
+
+            UpdateCurrentConfiguration(
+                new DeviceConnectionConfiguration(slaveAddress, serialSettings));
+        }
+
+        /// <summary>
         /// 在旧地址下写入 40001；只有 0x06 完整回显成功后才更新本地地址。
         /// </summary>
         /// <param name="newSlaveAddress">目标真实地址，允许 1 至 64，且不得与当前地址相同。</param>

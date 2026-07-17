@@ -1,0 +1,163 @@
+﻿<UserControl x:Class="CH32UpperComputer.App.Views.ParametersView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="760"
+             d:DesignWidth="1380">
+    <Grid Margin="0,10,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource Card}" Padding="14">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}" Text="参数读取与整组下发" />
+                    <TextBlock Margin="0,4,0,0"
+                               Style="{StaticResource Text.Caption}"
+                               Text="进入页面不会自动读取；每次保存只处理一个地址连续的普通参数组。" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox Width="230"
+                              Margin="0,0,8,0"
+                              ItemsSource="{Binding ParameterGroups}"
+                              DisplayMemberPath="Name"
+                              SelectedItem="{Binding SelectedGroup}" />
+                    <Button Margin="0,0,8,0"
+                            Command="{Binding ReadAllCommand}"
+                            Content="读取全部" />
+                    <Button Margin="0,0,8,0"
+                            Command="{Binding ReadSelectedGroupCommand}"
+                            Content="读取当前组" />
+                    <Button Style="{StaticResource Button.Primary}"
+                            Command="{Binding SaveSelectedGroupCommand}"
+                            Content="预校验并写入当前组" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <DataGrid Grid.Row="1"
+                  Margin="0,10"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  IsReadOnly="False"
+                  ItemsSource="{Binding SelectedGroup.Items}"
+                  RowHeight="48"
+                  AlternationCount="2"
+                  EnableRowVirtualization="True"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling">
+            <DataGrid.Columns>
+                <DataGridTextColumn Width="85" Header="地址" IsReadOnly="True" Binding="{Binding AddressText}" />
+                <DataGridTextColumn Width="180" Header="参数" IsReadOnly="True" Binding="{Binding Definition.Name}" />
+                <DataGridTextColumn Width="145" Header="当前值" IsReadOnly="True" Binding="{Binding CurrentValueText}" />
+                <DataGridTemplateColumn Width="160" Header="准备写入">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Margin="4"
+                                     VerticalContentAlignment="Center"
+                                     Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Width="100" Header="原始字" IsReadOnly="True" Binding="{Binding RawPreview}" />
+                <DataGridTextColumn Width="100" Header="单位" IsReadOnly="True" Binding="{Binding Definition.Unit}" />
+                <DataGridTemplateColumn Width="260" Header="报警使能位">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ItemsControl ItemsSource="{Binding AlarmBits}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel VerticalAlignment="Center" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Margin="0,0,9,0"
+                                                  Content="{Binding DisplayName}"
+                                                  IsChecked="{Binding IsEnabled}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Width="*" Header="校验说明" IsReadOnly="True" Binding="{Binding ValidationMessage}" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.05*" />
+                <ColumnDefinition Width="1.05*" />
+                <ColumnDefinition Width="1.25*" />
+                <ColumnDefinition Width="1.4*" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Margin="0,0,8,0" Style="{StaticResource Card}" Padding="14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}" Text="修改设备地址" />
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Text.Muted}" Text="独立 0x06 流程，回显成功后更新本地地址。" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBox Width="90" Text="{Binding TargetSlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Margin="8,0,0,0" Command="{Binding ChangeAddressCommand}" Content="下发地址" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Margin="0,0,8,0" Style="{StaticResource Card}" Padding="14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}" Text="修改波特率" />
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Text.Muted}" Text="完整回显后关闭旧口并使用新波特率重连。" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal">
+                        <ComboBox Width="110"
+                                  ItemsSource="{Binding DataContext.SerialConnection.BaudRates, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  SelectedItem="{Binding TargetBaudRate}" />
+                        <Button Margin="8,0,0,0" Command="{Binding ChangeBaudRateCommand}" Content="下发并重连" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Margin="0,0,8,0" Style="{StaticResource Card}" Padding="14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}" Text="未知地址查询" />
+                    <TextBlock Margin="0,4,0,9"
+                               Foreground="{DynamicResource Brush.Warning}"
+                               Text="{Binding UnknownAddressWarning}"
+                               TextWrapping="Wrap" />
+                    <Button HorizontalAlignment="Left"
+                            Command="{Binding DiscoverAddressCommand}"
+                            Content="确认总线单设备并查询" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="3" Style="{StaticResource Card}" Padding="14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}" Text="恢复出厂" />
+                    <TextBlock Margin="0,4,0,9"
+                               Foreground="{DynamicResource Brush.Danger}"
+                               Text="写入 40036=1 后设备恢复地址 1、9600-8-N-1；定时发送保持关闭。"
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal">
+                        <CheckBox Margin="0,0,8,0"
+                                  Content="我已确认"
+                                  IsChecked="{Binding FactoryResetConfirmed}" />
+                        <Button Style="{StaticResource Button.Danger}"
+                                Command="{Binding RestoreFactoryCommand}"
+                                Content="恢复出厂" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <TextBlock Grid.ColumnSpan="4"
+                       Margin="2,136,2,0"
+                       Style="{StaticResource Text.Caption}"
+                       Text="{Binding StatusMessage}"
+                       TextTrimming="CharacterEllipsis" />
+        </Grid>
+    </Grid>
+</UserControl>

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～7 已完成；下一完整功能为“发送与事务协调”Task 8～9，完成前不做中间验证
+implementation_status = Task 1～9 已完成；下一完整功能为“定时发送与安全配置流程”Task 10～11，完成前不做中间验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1321,20 +1321,20 @@ Run: `git commit -m "feat(infra): add single-loop serial transport"`
 - Create: `src\CH32UpperComputer.Infrastructure\Transactions\PendingTransaction.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Transactions\PendingTransactionTests.cs`
 
-- [ ] **Step 1: 写单一完成失败测试**
+- [x] **Step 1: 写单一完成失败测试**
 
 为 Succeeded、RawCaptured、ModbusException、TimedOut、Cancelled、WriteFailed、Disconnected、ReceiveOverflow、ApplicationStopping 分别调用 TryComplete，断言第一个成功、后续失败、Task 只完成一次。
 
-- [ ] **Step 2: 写竞态失败测试**
+- [x] **Step 2: 写竞态失败测试**
 
 用 Barrier 同时释放“响应/超时”“取消/响应”“断开/超时”两方；每轮断言恰有一个 `true`、一个 `false`，最终状态等于胜者且诊断保留失败候选。循环足够次数捕获竞态，但不使用 Sleep。
 
-- [ ] **Step 3: 运行并确认失败**
+- [x] **Step 3: 运行并确认失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~PendingTransactionTests`
 Expected: FAIL，PendingTransaction 尚不存在。
 
-- [ ] **Step 4: 实现原子门**
+- [x] **Step 4: 实现原子门**
 
 ```csharp
 public bool TryComplete(TransactionCompletionState newState, TransactionOutcome outcome)
@@ -1356,7 +1356,7 @@ public bool TryComplete(TransactionCompletionState newState, TransactionOutcome 
 
 `TaskCompletionSource<TransactionOutcome>` 必须使用 `RunContinuationsAsynchronously`；TransactionOutcome 可携带标准解析结果或 RawCaptured 的完整字节、CRC 状态和解析种类；失败方只记录诊断，不负责 UI、事务门或端口清理。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~PendingTransactionTests`
 Expected: PASS，0 failed。
@@ -1372,51 +1372,59 @@ Run: `git commit -m "feat(infra): add atomic transaction completion gate"`
 - Create: `src\CH32UpperComputer.Infrastructure\Transactions\ModbusTransactionCoordinator.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Transactions\ModbusTransactionCoordinatorTests.cs`
 
-- [ ] **Step 1: 写连接静默和 Busy 失败测试**
+- [x] **Step 1: 写连接静默和 Busy 失败测试**
 
 连接 Fake 后推进虚拟时间，断言 0 次写入。提交第一事务后立即提交相同/不同第二事务，断言第二项 `TransactionRejected.Busy`、无 TransactionId、无额外写入、内部无 ConcurrentQueue/Channel 请求容器。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~ModbusTransactionCoordinatorTests`
 Expected: FAIL，协调器尚不存在。
 
-- [ ] **Step 3: 实现活动门和事务所有者清理**
+- [x] **Step 3: 实现活动门和事务所有者清理**
 
 `TryExecuteAsync` 首先 `Interlocked.CompareExchange(ref _active, 1, 0)`；失败立即 Busy。成功后再分配 TransactionId、写串口并等待 PendingTransaction；finally 中恰好一次复位 `_active` 并发布 BusyChanged(false)。所有接收/超时回调只竞争 TryComplete，不直接复位门。
 
-- [ ] **Step 4: 写正常/异常/写失败/取消/断开/溢出失败测试**
+- [x] **Step 4: 写正常/异常/写失败/取消/断开/溢出失败测试**
 
 每种事件完成相应终态；WriteAsync 抛出 IOException/ObjectDisposedException 时进入 WriteFailed 或 Disconnected 并释放活动门；断开与响应竞争时事务结果只取胜者，但连接所有者仍恰好关闭一次并更新全局连接状态。
 
-- [ ] **Step 5: 写 RawDebug 完成契约失败测试**
+- [x] **Step 5: 写 RawDebug 完成契约失败测试**
 
 TransactionRequest 必须显式选择 Standard/RawDebug。RawDebug 对已知结构在结构完整时返回 RawCaptured；未知结构在字节间静默、收到部分字节后的总响应超时或 4096 上限时返回 RawCaptured，并保留 RawCrcFrame/UnparsedRawCapture 状态；完全没有收到字节才 TimedOut。RawCaptured 不执行请求签名匹配、不更新 DeviceSnapshot；同批后续捕获只记 Unsolicited。
 
-- [ ] **Step 6: 写超时边界和迟到响应失败测试**
+- [x] **Step 6: 写超时边界和迟到响应失败测试**
 
 用 ManualTimeProvider 在截止前 1 tick、截止同 tick、截止后 1 tick 注入响应；断言单一终态。A 超时后进入 Resynchronizing，隔离期间迟到 A 只记 LateOrUnsolicited；获得 `max(timeout,100ms)` 连续静默后才回 Idle，超过 `2*guard` 断开。
 
-- [ ] **Step 7: 写相同 A/B 残余歧义测试**
+- [x] **Step 7: 写相同 A/B 残余歧义测试**
 
 A 超时后禁止自动重试；用户在重同步完成后手动发送相同 B 前看到风险状态。隔离期任何 A 帧不能完成 B；日志保留旧 TransactionId/ReceiveSequence/PortGeneration。
 
-- [ ] **Step 8: 运行并确认 RawDebug/终态/超时/迟到行为失败**
+- [x] **Step 8: 运行并确认 RawDebug/终态/超时/迟到行为失败**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~ModbusTransactionCoordinatorTests`
 Expected: FAIL，新增协调器状态行为尚未实现。
 
-- [ ] **Step 9: 实现双模式响应消费循环和重同步状态机**
+- [x] **Step 9: 实现双模式响应消费循环和重同步状态机**
 
 消费 `ISerialTransport.ReadAllAsync` 块并交给 framer。Standard 只有当前 PortGeneration、发送后、截止前且签名匹配的第一候选能完成事务；RawDebug 按 Step 5 的捕获结束规则完成 RawCaptured。两种模式的同批其他帧均记 Unsolicited。使用 TimeProvider 计时，不直接 DateTime.Now/Task.Delay。
 
-- [ ] **Step 10: 运行测试并提交**
+- [x] **Step 10: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~Transactions`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Transactions tests\CH32UpperComputer.Infrastructure.Tests\Transactions`
 Run: `git commit -m "feat(infra): coordinate bounded Modbus transactions"`
+
+**Execution Record (2026-07-17):** 按“完整功能完成后集中验证”完成 Task 8～9。实现九类终态共用的
+原子完成门、无请求队列 Busy 背压、Standard/RawDebug 双模式、0x03/0x06/0x10/0xFE 严格签名、
+响应截止边界、取消/写失败/断开/应用退出竞争、4096 字节接收溢出、迟到响应隔离、连续静默 guard
+及两倍 guard 强制断开；连接后保持零自动写入。集中验证首次发现测试语法问题和原始噪声 CRC 历史
+长度重复扫描导致的性能退化，保留失败用例并修复为逐字节增量边界检查。最终 Transactions 41/41，
+全解决方案 Debug build 0 warning/0 error，format verify、diff check、UTF-8 BOM 与 CRLF 检查全部通过；
+实现提交 `e4bb007`。真实串口硬件响应与物理拔插仍留待最终硬件验收。
 
 ### Task 10: 纯 fixed-delay 定时发送与停止竞态（TDD）
 

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～16 已完成；下一完整功能为“UTF-8 文档与 win-x64 单文件发布”Task 17，完成完整交付功能后再集中验证
+implementation_status = Task 1～16 已完成；Task 17 的文档、Release 发布和开发机烟雾检查已完成，无 .NET 8 Desktop Runtime 的干净环境证据因当前 Windows Home 无 Sandbox 仍待外部环境；Task 18 最终本地审查进行中
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1804,23 +1804,23 @@ Run: `git commit -m "test: cover simulated device and transaction races"`
 - Create: `scripts\verify-self-contained-sandbox.ps1`
 - Modify: `src\CH32UpperComputer.App\CH32UpperComputer.App.csproj`
 
-- [ ] **Step 1: 写使用说明**
+- [x] **Step 1: 写使用说明**
 
 包含安装/启动、串口设置、连接后静默、手动指令、自动 CRC、常用指令、定时启动/停止、参数读写、Busy 提示、日志导出、迟到响应、ConfigurationUncertain 恢复和安全退出。0xFE 警告必须完整出现。
 
-- [ ] **Step 2: 写寄存器说明**
+- [x] **Step 2: 写寄存器说明**
 
 从第 4 节逐项转录 40001～40036：协议地址、RawEncoding、范围、缩放、精度、单位、权限；明确 MQ2 非标定 ppm、回差 <=0、40036 写 1/读 0。
 
-- [ ] **Step 3: 固定发布属性**
+- [x] **Step 3: 固定发布属性**
 
 App csproj 写入 `RuntimeIdentifier=win-x64`、`SelfContained=true`、`PublishSingleFile=true`、`IncludeNativeLibrariesForSelfExtract=true`、`EnableCompressionInSingleFile=true`、`PublishTrimmed=false`、`DebugType=embedded`、`InvariantGlobalization=false`。
 
-- [ ] **Step 4: 编写发布脚本**
+- [x] **Step 4: 编写发布脚本**
 
 脚本顺序固定：检查工作目录 -> `dotnet restore --locked-mode` -> `dotnet test -c Release` -> `dotnet build -c Release --no-restore` -> `dotnet publish ... --no-restore` -> 检查输出存在且主交付仅一个 EXE -> 输出 SHA256 和文件大小。任一步失败立即退出非零。
 
-- [ ] **Step 5: 执行发布**
+- [x] **Step 5: 执行发布**
 
 Run: `powershell -ExecutionPolicy Bypass -File scripts\publish-win-x64.ps1`
 Expected: `artifacts\publish\win-x64\CH32UpperComputer.App.exe` 存在，测试 0 failed，发布 0 errors。
@@ -1831,10 +1831,12 @@ Expected: `artifacts\publish\win-x64\CH32UpperComputer.App.exe` 存在，测试 
 `powershell -ExecutionPolicy Bypass -File scripts\verify-self-contained-sandbox.ps1 -Executable artifacts\publish\win-x64\CH32UpperComputer.App.exe`。
 脚本检查 Windows Sandbox 功能，生成临时 `.wsb`，只读映射发布目录、可写映射验证目录；Sandbox 内先用 `Get-Command dotnet -ErrorAction SilentlyContinue` 检测运行时：不存在则记录 `DOTNET_NOT_INSTALLED`，存在则保存 `dotnet --list-runtimes` 并确认没有 .NET 8 Desktop Runtime；随后启动 EXE，存活并显示窗口后写入 `artifacts\validation\SELF_CONTAINED_PASS.txt`。若系统无 Windows Sandbox，则必须在干净 Windows 10/11 x64 VM 上执行同等步骤并保存运行时列表与截图；在获得该证据前，本验收项保持未完成且不得声称“无运行时可启动”。同时在开发机完成中文、无设备浏览、连接后不自动发送和安全关闭的普通烟雾检查，并保存 `artifacts\screenshots\dashboard-v5.png`。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 Run: `git add docs scripts src\CH32UpperComputer.App\CH32UpperComputer.App.csproj`
 Run: `git commit -m "docs: add usage guide and Windows release pipeline"`
+
+**Execution Record (2026-07-17):** 完成中文使用说明和 40001～40036 全量寄存器说明，36 项地址连续且逐项记录 RawEncoding、原始范围、缩放、精度、单位和权限。App 固定 win-x64、自包含、单文件、原生库自解压、压缩、禁止裁剪、嵌入调试信息、保留区域性，并禁止把 XML 注释文档复制到发布目录；新增 RID 和 SDK 隐式 `Microsoft.NET.ILLink.Tasks 8.0.23` 后重新生成并保留锁文件。发布脚本从 locked restore 开始完整执行，Release 测试 Core 119/119、Infrastructure 124/124、App 10/10，共 253/253；Release build 0 warning/0 error；发布目录仅含 `CH32UpperComputer.App.exe`，大小 72,026,955 bytes，SHA256 `37E20F7CB8363FD04FF1075099391C4940797C278EBBEAF4455CFBAFFB702733`。开发机直接启动发布 EXE 后成功自渲染并安全退出，截图与既有 `artifacts\screenshots\dashboard-v5.png` SHA256 完全一致，中文和第五版布局无异常。自包含 Sandbox 脚本语法和前置检查有效，但当前系统报告 Windows Home 且没有 `WindowsSandbox.exe`，因此 Step 6 按计划保持未完成，必须在支持 Sandbox 的 Windows Pro/Enterprise/Education 或无 .NET 8 Desktop Runtime 的干净 Windows x64 VM 中补证。
 
 ### Task 18: 最终验证、代码审查与交付
 

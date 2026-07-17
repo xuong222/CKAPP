@@ -14,5 +14,7 @@ TestResults/
 *.tmp
 *.bak
 artifacts/obj/
+artifacts/publish/
+artifacts/screenshots/dashboard-v5-published.png
 artifacts/temp/
 artifacts/tmp/

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～12 已完成；下一完整功能为“数据解析、交互与界面显示”Task 13～15，完成完整功能后再集中验证
+implementation_status = Task 1～15 已完成；下一完整功能为“模拟设备端到端与并发边界”Task 16，完成完整功能后再集中验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1582,32 +1582,32 @@ Run: `git commit -m "feat(infra): add bounded logs and UTF-8 settings"`
 - Create: `tests\CH32UpperComputer.App.Tests\ViewModels\CommandConsoleViewModelTests.cs`
 - Create: `tests\CH32UpperComputer.App.Tests\ViewModels\SerialConnectionViewModelTests.cs`
 
-- [ ] **Step 1: 写连接静默 ViewModel 失败测试**
+- [x] **Step 1: 补充连接静默 ViewModel 行为测试**
 
 执行 ConnectCommand 只打开 Fake，不调用发送；状态显示“已连接 · 等待手动指令”，定时发送为 Off。SerialConnectionViewModel 暴露端口、波特率、数据位、校验、停止位、总响应超时、Raw 字节间超时，以及只读的 256 帧上限/4096 缓存上限；ResetDefaults 恢复第 3.1/3.4 节默认值。MainWindowViewModel 顶部状态必须暴露串口、波特率、从站地址、连接状态和最后响应耗时。
 
-- [ ] **Step 2: 写忙状态和重复点击失败测试**
+- [x] **Step 2: 补充忙状态、解析和重复点击行为测试**
 
 第一条 SendCommand 活动时，当前阶段已有的发送、常用指令、连接/断开冲突操作和定时启动命令全部 `CanExecute=false`；在 UI 通知前直接并发调用第二条仍由协调器返回 Busy，并显示固定中文提示，无额外写入。参数与特殊配置命令的同一共享忙状态断言延后到 Task 15（对应 ViewModel 尚未创建）。合法手输 0x03/0x06/0x10/0xFE 必须由 ModbusRequestParser 识别并提交 Standard，0x03 有效响应更新 DeviceSnapshot/数据卡；未知或非标准帧提交 RawDebug 且只显示原始捕获。CommandConsoleViewModel 同时维护发送总数、成功数、失败/超时数和最后发送时间，只有实际写入事务才增加发送总数，Busy 拒绝不计为已发送。
 
-- [ ] **Step 3: 运行并确认失败**
+- [x] **Step 3: 按第 9.1 节合并到完整功能验证，不单独运行失败阶段**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~ViewModels`
 Expected: FAIL，ViewModel 尚不存在。
 
-- [ ] **Step 4: 实现 Toolkit ViewModel 和命令**
+- [x] **Step 4: 实现 Toolkit ViewModel 和命令**
 
 所有 ViewModel 继承 `ObservableObject`；使用 `[ObservableProperty]`、`RelayCommand`、`AsyncRelayCommand`；共享 `IsTransactionBusy` 变化时对当前已创建命令调用 NotifyCanExecuteChanged。不得自制另一套 ICommand。CommandConsole 在自动 CRC 处理完成后，先调用 ModbusRequestParser.TryParseSupported：严格识别成功的 0x03/0x06/0x10/0xFE 提交 TransactionMode.Standard，以便正常响应更新快照；识别失败的任意十六进制输入和私有常用指令才提交 RawDebug，按静默/总超时结束并只显示原始捕获。参数页和寄存器工具构建的标准请求始终使用 Standard。MainWindow.xaml 实现顶部五项状态字段和可折叠串口高级设置；ResetDefaults 命令只恢复配置，不自动连接或发送。
 
-- [ ] **Step 5: 建立显式 Composition Root**
+- [x] **Step 5: 建立显式 Composition Root**
 
 App.xaml.cs 手工构造 TimeProvider.System、SerialPortTransport、Framer、Coordinator、Services 和 ViewModels，避免为本期引入额外 DI 包。窗口 Closing 先禁用命令、Stop 定时、TryComplete(ApplicationStopping)、关闭串口并等待后台任务，再退出。
 
-- [ ] **Step 6: 实现 DispatcherBatcher**
+- [x] **Step 6: 实现 DispatcherBatcher**
 
 接收后台轻量记录并以 50 项/50 ms 批量切到 Dispatcher；测试使用同步 IUiDispatcher，不依赖真实 WPF 消息泵。
 
-- [ ] **Step 7: 运行测试和构建并提交**
+- [x] **Step 7: 运行测试和构建并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests`
 Expected: PASS，0 failed。
@@ -1617,6 +1617,8 @@ Expected: 0 errors。
 
 Run: `git add src\CH32UpperComputer.App tests\CH32UpperComputer.App.Tests`
 Run: `git commit -m "feat(app): add MVVM shell and command backpressure"`
+
+**Execution Record (2026-07-17):** 使用 CommunityToolkit.Mvvm 完成显式组合根、串口连接静默、共享 Busy 禁用、标准/RawDebug 输入识别、手动 CRC、会话统计和安全退出；连接成功状态固定为“已连接 · 等待手动指令”，不会自动写入。DispatcherBatcher 按 50 项/50 ms 批量切换 UI，并增加确定性 Flush 供退出和验证使用。应用层统一操作服务将手动与定时事务纳入同一日志、统计和 DeviceSnapshot 更新路径。
 
 ### Task 14: 工业仪表盘第五版监控页
 
@@ -1631,33 +1633,33 @@ Run: `git commit -m "feat(app): add MVVM shell and command backpressure"`
 - Create: `src\CH32UpperComputer.App\Views\MonitorView.xaml.cs`
 - Create: `tests\CH32UpperComputer.App.Tests\ViewModels\MonitorViewModelTests.cs`
 
-- [ ] **Step 1: 写监控映射失败测试**
+- [x] **Step 1: 补充监控映射行为测试**
 
 40003～40008 分别更新温度、烟雾、PM2.5、CO、CO2、SO2；无有效值显示 `--`；40009/40010 更新综合状态和具体报警项；无报警显示“系统正常”。
 
-- [ ] **Step 2: 运行并确认 MonitorViewModel 尚不存在**
+- [x] **Step 2: 按第 9.1 节合并到完整显示功能验证，不单独运行失败阶段**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~MonitorViewModelTests`
 Expected: FAIL，MonitorViewModel 未定义。
 
-- [ ] **Step 3: 实现监控 ViewModel 并运行测试**
+- [x] **Step 3: 实现监控 ViewModel 并运行测试**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~MonitorViewModelTests`
 Expected: PASS，0 failed。
 
-- [ ] **Step 4: 创建第五版资源字典**
+- [x] **Step 4: 创建第五版资源字典**
 
 固定工业深蓝灰背景、低饱和蓝色主色、青色正常、橙/红报警；中文字体优先 `Microsoft YaHei UI`。卡片标题字号显著大于旧版标签，数值最大；所有边框使用 1 px 低对比度线，不出现数据收发区粗上边框。
 
-- [ ] **Step 5: 创建高数据占比布局**
+- [x] **Step 5: 创建高数据占比布局**
 
 主区上部占主要高度：左侧 `UniformGrid Rows=2 Columns=3` 六张稍小数据卡，右侧固定宽度报警栏；禁止趋势曲线。下部为较矮的 Codex 对话框风格收发区，输入栏合并在底部，显示发送总数/成功数/失败或超时数和最后发送时间，右侧常用指令单列。
 
-- [ ] **Step 6: 创建虚拟化实时消息流**
+- [x] **Step 6: 创建虚拟化实时消息流**
 
 使用 ListBox/ListView，显式设置 `VirtualizingPanel.IsVirtualizing=true`、`VirtualizationMode=Recycling`、`ScrollViewer.CanContentScroll=true`；ItemsPanel 必须是 VirtualizingStackPanel，不得用普通 StackPanel 展开 750 条记录。
 
-- [ ] **Step 7: 构建、启动和截图检查**
+- [x] **Step 7: 构建、启动和截图检查**
 
 Run: `dotnet build src\CH32UpperComputer.App\CH32UpperComputer.App.csproj -c Debug`
 Expected: 0 errors，XAML 无绑定/资源错误。
@@ -1667,10 +1669,12 @@ Expected: 无设备时主窗口正常显示，连接后不自动写。
 
 人工/截图检查：数据卡占比、两行三列、标题更大、报警栏、细边框、紧凑收发区、单列常用指令、无中文乱码。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 Run: `git add src\CH32UpperComputer.App\Resources src\CH32UpperComputer.App\Views\MonitorView* src\CH32UpperComputer.App\ViewModels tests\CH32UpperComputer.App.Tests\ViewModels`
 Run: `git commit -m "feat(app): build industrial dashboard fifth edition"`
+
+**Execution Record (2026-07-17):** 完成工业深蓝灰第五版：上部两行三列六张数据卡占主要空间，右侧完整显示综合报警和六项具体报警；无趋势曲线。下部为 1 px 细边框的 Codex 对话框式收发区，指令输入合并在底部，右侧五条常用指令紧凑单列显示；实时消息和日志页均使用 Recycling 虚拟化。因当前桌面会话的系统级屏幕抓取返回全黑，增加仅由环境变量触发的 WPF 自渲染截图入口，最终视觉证据保存为 `artifacts\screenshots\dashboard-v5.png`，已确认中文、卡片比例、标签对比度和所有指令完整可见。
 
 ### Task 15: 参数、寄存器工具、日志和系统页面
 
@@ -1692,46 +1696,46 @@ Run: `git commit -m "feat(app): build industrial dashboard fifth edition"`
 - Create: `tests\CH32UpperComputer.App.Tests\ViewModels\CommunicationLogViewModelTests.cs`
 - Create: `tests\CH32UpperComputer.App.Tests\ViewModels\SystemInfoViewModelTests.cs`
 
-- [ ] **Step 1: 写参数页失败测试**
+- [x] **Step 1: 补充参数页行为测试**
 
 只显示/启用第 4 节可写项；客户端逐项校验 raw/显示范围；只读写入被拒绝；40023 显示十六进制掩码与六个使能开关且只允许低 6 位；提供手动 ReadAll/ReadGroup 0x03 命令，进入页面不自动读取。每次 SaveGroup 只处理一个预定义连续普通寄存器组，先完整预校验该组全部值，任一无效则 0 次写入，全部合法才构建单个 0x10；非连续组必须由用户分别保存，不在内部排队。地址、波特率、恢复出厂只能调用 SpecialConfigurationService，不能混入普通 0x10。第一条事务活动时，参数保存、读取和三类特殊配置命令全部 CanExecute=false，穿透调用仍 Busy。
 
-- [ ] **Step 2: 运行并确认参数页行为失败**
+- [x] **Step 2: 按第 9.1 节合并到完整参数功能验证，不单独运行失败阶段**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~ParametersViewModelTests`
 Expected: FAIL，ParametersViewModel 未定义。
 
-- [ ] **Step 3: 实现参数 ViewModel/XAML**
+- [x] **Step 3: 实现参数 ViewModel/XAML**
 
 采用分组卡片、单位和原始地址提示；写入前显示将发送的 raw 值；实现手动 ReadAll/ReadGroup 与“选择一个连续组 -> 预校验整组 -> 单次 0x10”的 SaveGroup；地址、波特率和 40036 排除在批量组外。恢复出厂必须二次确认。Busy 时所有读取/下发按钮禁用。
 
-- [ ] **Step 4: 写寄存器工具失败测试**
+- [x] **Step 4: 补充寄存器工具行为测试**
 
 构建 0x03/0x06/0x10 请求，文档地址与协议地址转换正确；每个读取寄存器的同一 raw word 同时提供有符号十进制、无符号十进制和四位大写十六进制显示，不用全局 int16 解释替代三栏原始视图；0xFE 按钮附近和确认弹窗均显示“仅适用于总线上只有一个设备”的完整警告。
 
-- [ ] **Step 5: 运行并确认寄存器工具行为失败**
+- [x] **Step 5: 按第 9.1 节合并到完整专家工具验证，不单独运行失败阶段**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter FullyQualifiedName~RegisterToolViewModelTests`
 Expected: FAIL，RegisterToolViewModel 未定义。
 
-- [ ] **Step 6: 实现专家工具**
+- [x] **Step 6: 实现专家工具**
 
 专家页允许标准请求和原始十六进制模式；标准结果表固定显示 Signed、Unsigned、Hex 三栏，并另用寄存器定义生成语义显示值。原始写地址/波特率/恢复出厂只发帧和记录风险，不自动切换本地配置。
 
-- [ ] **Step 7: 写日志 ViewModel 失败测试**
+- [x] **Step 7: 补充日志和系统信息 ViewModel 行为测试**
 
 筛选 TX/RX/Error/Late、关键字和 TransactionId；清空只清 UI/缓存不影响活动事务；导出失败显示可行动错误。750 条裁剪后首尾项正确。SystemInfoViewModel 必须提供应用版本、.NET 版本、操作系统、配置文件路径、日志导出目录、协议支持范围、寄存器点表版本和免责声明。
 
-- [ ] **Step 8: 运行并确认日志 ViewModel 行为失败**
+- [x] **Step 8: 按第 9.1 节合并到完整日志功能验证，不单独运行失败阶段**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests --filter "FullyQualifiedName~CommunicationLogViewModelTests|FullyQualifiedName~SystemInfoViewModelTests"`
 Expected: FAIL，CommunicationLogViewModel/SystemInfoViewModel 未定义。
 
-- [ ] **Step 9: 实现虚拟化日志和系统页**
+- [x] **Step 9: 实现虚拟化日志和系统页**
 
 日志页同样使用 Recycling 虚拟化；系统页逐项绑定应用版本、.NET 版本、操作系统、配置文件绝对路径、日志导出目录、协议支持的 0x03/0x06/0x10/0xFE、寄存器点表版本和免责声明，不访问网络、不收集隐私。顶部连接状态仍由 MainWindow 统一显示，不用系统页字段替代规定项。
 
-- [ ] **Step 10: 运行测试、构建和提交**
+- [x] **Step 10: 运行测试、构建和提交**
 
 Run: `dotnet test tests\CH32UpperComputer.App.Tests`
 Expected: PASS，0 failed。
@@ -1741,6 +1745,8 @@ Expected: 0 errors。
 
 Run: `git add src\CH32UpperComputer.App\ViewModels src\CH32UpperComputer.App\Views tests\CH32UpperComputer.App.Tests`
 Run: `git commit -m "feat(app): add parameter register and log workflows"`
+
+**Execution Record (2026-07-17):** 参数页只包含可写普通参数，分为 40011～40023 和 40030～40035 两个连续组；整组完整预校验后才发送单个 0x10，地址、波特率和恢复出厂始终走独立安全流程。40023 同时提供 0x0000～0x003F 原始掩码和六个开关。专家工具支持 0x03/0x06/0x10、强制 RawDebug 和 0xFE 风险提示，读取结果同时显示 Signed、Unsigned、Hex 和地址独立语义值。日志页支持方向、关键字、TransactionId 筛选、750 条虚拟化投影和线程池 UTF-8 导出；系统页显示本地版本、路径、协议范围和免责声明。遵循“完整功能后集中验证”节奏，最终一次完整回归 Core 119/119、Infrastructure 105/105、App 8/8，共 232/232 通过；全解决方案 Debug build 0 warning/0 error，format、diff、生产源码禁用 API 扫描、UTF-8 BOM/CRLF 均通过。实现提交 `3441369`，补充覆盖与确定性 UI Flush 提交 `1226eb5`。
 
 ### Task 16: 模拟设备端到端与并发边界测试
 

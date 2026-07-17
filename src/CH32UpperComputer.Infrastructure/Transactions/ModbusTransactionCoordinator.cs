@@ -509,9 +509,42 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// <param name="request">显式携带标准或原始模式以及超时的不可变请求。</param>
         /// <param name="cancellationToken">取消当前被接受事务的令牌。</param>
         /// <returns>接受事务的最终结果，或未分配 TransactionId 的立即拒绝结果。</returns>
-        public async ValueTask<TransactionExecutionResult> TryExecuteAsync(
+        public ValueTask<TransactionExecutionResult> TryExecuteAsync(
             TransactionRequest request,
             CancellationToken cancellationToken)
+        {
+            return TryExecuteCoreAsync(request, cancellationToken, null);
+        }
+
+        /// <summary>
+        /// 提交一项由定时计划控制的请求，并在实际写入前通过同一代次门做最后授权。
+        /// </summary>
+        /// <param name="request">定时计划当前代次需要发送的不可变请求。</param>
+        /// <param name="tryStartWrite">
+        /// 在调度代次锁内复核授权并同步启动写调用的原子入口；返回空值时不得写串口。
+        /// </param>
+        /// <returns>定时事务的最终结果，或无队列协调器产生的立即拒绝结果。</returns>
+        internal ValueTask<TransactionExecutionResult> TryExecuteScheduledAsync(
+            TransactionRequest request,
+            Func<Func<ValueTask>, ValueTask?> tryStartWrite)
+        {
+            ArgumentNullException.ThrowIfNull(tryStartWrite);
+            return TryExecuteCoreAsync(request, CancellationToken.None, tryStartWrite);
+        }
+
+        /// <summary>
+        /// 实现手动与定时请求共用的唯一无队列事务生命周期。
+        /// </summary>
+        /// <param name="request">显式携带模式、完整帧和超时的不可变请求。</param>
+        /// <param name="cancellationToken">手动事务取消令牌；定时事务使用空令牌。</param>
+        /// <param name="tryStartWrite">
+        /// 定时计划可选的授权并启动写入口；手动事务为空并直接启动写调用。
+        /// </param>
+        /// <returns>接受事务的最终结果，或未分配 TransactionId 的立即拒绝结果。</returns>
+        private async ValueTask<TransactionExecutionResult> TryExecuteCoreAsync(
+            TransactionRequest request,
+            CancellationToken cancellationToken,
+            Func<Func<ValueTask>, ValueTask?>? tryStartWrite)
         {
             ArgumentNullException.ThrowIfNull(request);
             TransactionRejected initialRejection = GetCurrentRejection();
@@ -575,7 +608,10 @@ namespace CH32UpperComputer.Infrastructure.Transactions
 
                 if (acceptedContext.Pending.CompletionState == TransactionCompletionState.Pending)
                 {
-                    await WriteAndArmTransactionAsync(acceptedContext, cancellationToken).ConfigureAwait(false);
+                    await WriteAndArmTransactionAsync(
+                        acceptedContext,
+                        cancellationToken,
+                        tryStartWrite).ConfigureAwait(false);
                 }
 
                 finalOutcome = await acceptedContext.Pending.Completion.ConfigureAwait(false);
@@ -710,13 +746,15 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// </summary>
         /// <param name="context">当前唯一活动事务上下文。</param>
         /// <param name="cancellationToken">取消物理写入的调用方令牌。</param>
+        /// <param name="tryStartWrite">
+        /// 定时计划可选的授权并启动写入口；手动事务为空并直接启动写调用。
+        /// </param>
         /// <returns>写入和等待状态设置完成后的任务。</returns>
         private async Task WriteAndArmTransactionAsync(
             ActiveTransactionContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<Func<ValueTask>, ValueTask?>? tryStartWrite)
         {
-            context.MarkWriteAttempted();
-
             if (context.Pending.CompletionState != TransactionCompletionState.Pending)
             {
                 return;
@@ -724,7 +762,42 @@ namespace CH32UpperComputer.Infrastructure.Transactions
 
             try
             {
-                await transport.WriteAsync(context.Request.Frame, cancellationToken).ConfigureAwait(false);
+                ValueTask writeOperation;
+
+                if (tryStartWrite is null)
+                {
+                    context.MarkWriteAttempted();
+                    writeOperation = transport.WriteAsync(
+                        context.Request.Frame,
+                        cancellationToken);
+                }
+                else
+                {
+                    ValueTask? authorizedWriteOperation = tryStartWrite(
+                        () =>
+                        {
+                            context.MarkWriteAttempted();
+                            return transport.WriteAsync(
+                                context.Request.Frame,
+                                cancellationToken);
+                        });
+
+                    if (!authorizedWriteOperation.HasValue)
+                    {
+                        TryComplete(
+                            context,
+                            TransactionCompletionState.Cancelled,
+                            "定时计划已在物理写入前停止，本次请求未发送。",
+                            null,
+                            null,
+                            null);
+                        return;
+                    }
+
+                    writeOperation = authorizedWriteOperation.Value;
+                }
+
+                await writeOperation.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

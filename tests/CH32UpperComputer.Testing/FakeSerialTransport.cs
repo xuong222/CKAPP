@@ -52,14 +52,29 @@ namespace CH32UpperComputer.Testing
         private readonly List<byte[]> writtenFrames = [];
 
         /// <summary>
+        /// 按成功打开顺序保存的不可变串口设置。
+        /// </summary>
+        private readonly List<SerialSettings> openHistory = [];
+
+        /// <summary>
         /// 当前打开会话；未打开或会话结束时为 <see langword="null"/>。
         /// </summary>
         private Session? currentSession;
 
         /// <summary>
+        /// 当前打开会话使用的完整串口设置；未打开时为空。
+        /// </summary>
+        private SerialSettings? currentSettings;
+
+        /// <summary>
         /// 公开端口代次；打开成功与活动会话关闭、断开或释放时均递增。
         /// </summary>
         private int portGeneration;
+
+        /// <summary>
+        /// 通过 <see cref="CloseAsync"/> 实际关闭活动会话的次数。
+        /// </summary>
+        private int closeOperationCount;
 
         /// <summary>
         /// 下一次写入时需要抛出的脚本化 I/O 异常。
@@ -166,6 +181,48 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
+        /// 获取当前打开会话使用的不可变串口设置；未打开时为空。
+        /// </summary>
+        public SerialSettings? CurrentSettings
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return currentSettings;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取全部成功打开设置的独立只读快照。
+        /// </summary>
+        public IReadOnlyList<SerialSettings> OpenHistory
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return new ReadOnlyCollection<SerialSettings>(openHistory.ToArray());
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取通过关闭 API 实际关闭活动会话的次数。
+        /// </summary>
+        public int CloseOperationCount
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return closeOperationCount;
+                }
+            }
+        }
+
+        /// <summary>
         /// 打开全新模拟会话，递增代次并重置该会话的接收序号。
         /// </summary>
         /// <param name="settings">经过验证的串口参数；模拟器不访问操作系统端口。</param>
@@ -190,6 +247,8 @@ namespace CH32UpperComputer.Testing
 
                 int newGeneration = checked(portGeneration + 1);
                 currentSession = new Session(newGeneration, receiveCapacity);
+                currentSettings = settings;
+                openHistory.Add(settings);
                 portGeneration = newGeneration;
             }
 
@@ -295,6 +354,8 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
+                    currentSettings = null;
+                    closeOperationCount = checked(closeOperationCount + 1);
                     portGeneration = checked(portGeneration + 1);
                 }
             }
@@ -458,6 +519,7 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
+                    currentSettings = null;
                     portGeneration = checked(portGeneration + 1);
                 }
             }
@@ -486,6 +548,7 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
+                    currentSettings = null;
                     portGeneration = checked(portGeneration + 1);
                 }
             }

@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～4 已完成并通过双重审查；下一步执行 Task 5
+implementation_status = Task 1～5 已完成；正在连续构建“串口接收”完整功能的 Task 6～7，完成前不做中间验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -556,22 +556,29 @@ Tests -> 被测项目
 6. 不收集网络数据，不上传日志，不保存凭据。
 
 -------------------------------------------------------------------------------
-9. 测试与构建策略（构建优先、里程碑集中验证）
+9. 测试与构建策略（完整功能优先、功能完成后集中验证）
 -------------------------------------------------------------------------------
 
 9.1 实施与验证节奏
 
-2026-07-16 用户调整：降低测试执行频率，将实施重心转向可运行功能和界面构建。本节规则覆盖后续
-任务中更细粒度的“每个小步骤立即运行测试”措辞，但不删除关键协议与并发回归覆盖。
+2026-07-16 用户首次调整：降低测试执行频率，将实施重心转向功能和界面构建。
+2026-07-17 用户再次明确：验证单位必须是完整用户功能，不是 Task、类、提交或“可运行功能块”。
+本节规则覆盖后续任务中更细粒度的“每个步骤/Task 立即运行测试或构建”措辞，但不删除关键回归覆盖。
 
-1. 以一个可运行功能块为基本实施单位：先连续完成该功能块的生产代码、接线和必要界面，再做一次集中验证；
-   不在每个类、函数或微小编辑后反复运行完整测试集。
-2. CRC、组帧、事务完成门、迟到响应、串口断开、Busy 背压、定时停止竞态和已发现缺陷等高风险行为，
-   仍保留针对性自动化测试；允许在功能块实现前一次性写好代表性失败测试，再集中完成实现。
-3. 每个 Task 收尾时运行该模块的聚焦测试；每完成一个可运行阶段或准备发布时，才运行全量测试。
-4. 每个连贯功能块至少执行一次 Debug 构建；WPF 视觉工作以构建成功、实际启动和截图检查为主要验收手段。
-5. 发现真实缺陷时，先留下最小可复现回归测试再修复；不得为增加测试数量而制造低价值用例。
-6. UI 业务逻辑优先放入 ViewModel/Service；纯 XAML 视觉不强制单元测试，采用构建和截图验收。
+1. 先连续完成一个端到端完整功能，再统一验证；中间 Task 只做代码自查和版本提交，不运行聚焦测试、
+   全量测试、发布验证或重复截图。
+2. 完整功能边界固定如下：
+   - 接收：串口抽象、真实唯一 ReadAsync 循环、RTU 分段/粘包组帧、静默结束、溢出和断开处理全部完成。
+   - 发送：单事务协调、原子完成门、Busy 背压、标准/原始发送、超时和迟到响应隔离全部完成。
+   - 自动与配置：定时发送、地址、波特率、恢复出厂和 0xFE 专用流程全部完成。
+   - 日志：通信记录、容量裁剪、批量 UI 投递、筛选和导出全部完成。
+   - 显示与操作：第五版 WPF 壳、数据卡、报警栏、收发框、常用指令、参数页和寄存器工具完成接线。
+   - 交付：设置、文档、端到端验收和 win-x64 单文件发布全部完成。
+3. CRC、组帧、完成门、迟到响应、串口断开、Busy、定时停止竞态和真实缺陷仍保留自动化覆盖，
+   但只在对应完整功能完成后集中运行一次；不得在其内部步骤间反复执行。
+4. 发现真实缺陷时保留最小回归用例，修复并继续构建；该用例与所属完整功能的集中验证一起运行。
+5. WPF 纯视觉以“显示与操作”功能整体完成后的实际启动和截图为主要验收，不为中间 XAML 反复截图。
+6. 发布前再执行一次全量测试、Release 构建、截图和自包含发布验收。
 
 9.2 Core 测试矩阵
 
@@ -1128,7 +1135,7 @@ Run: `git commit -m "feat(core): define device registers and alarms"`
 阻止同形状不同起始地址响应及 0xFE 地址发现结果误写快照。规格审查发现测试预言曾依赖生产定义后，
 已改为测试内独立固定 36 项定义与 22 项边界，复审通过。Registers 74/74、Core 119/119，
 Debug build 0 warning/0 error，format verify 与 diff check 通过；实现提交 `7c2f61a`，质量审查无
-Critical/Important 问题。根据用户最新要求，后续改用第 9.1 节的构建优先、里程碑集中验证节奏。
+Critical/Important 问题。后续验证节奏以第 9.1 节最新的“完整功能完成后集中验证”规则为准。
 
 ### Task 5: 串口抽象与确定性测试工具
 
@@ -1145,16 +1152,16 @@ Critical/Important 问题。根据用户最新要求，后续改用第 9.1 节�
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Serial\FakeSerialTransportTests.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Time\ManualTimeProviderTests.cs`
 
-- [ ] **Step 1: 写接口契约失败测试**
+- [x] **Step 1: 写接口契约失败测试**
 
 测试 Fake 打开后 PortGeneration 增加、关闭后读取流结束、写入可观测、注入块保留 ReceiveSequence 和时间戳、断开可脚本化；测试 ManualTimeProvider 的一次性/周期计时、Change、Dispose、同刻到期顺序和锁外回调。
 
-- [ ] **Step 2: 运行并确认接口与 Fake 尚不存在**
+- [x] **Step 2: 运行并确认接口与 Fake 尚不存在**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter "FullyQualifiedName~FakeSerialTransportTests|FullyQualifiedName~ManualTimeProviderTests"`
 Expected: FAIL，ISerialTransport/FakeSerialTransport 未定义。
 
-- [ ] **Step 3: 定义最小传输接口**
+- [x] **Step 3: 定义最小传输接口**
 
 ```csharp
 public interface ISerialTransport : IAsyncDisposable
@@ -1171,25 +1178,32 @@ public interface ISerialTransport : IAsyncDisposable
 接口不得暴露 SerialPort；`SerialSettings` 在构造时验证端口名、波特率、8-N-1 等参数和 50..5000 ms 响应超时。
 同时复核 Testing.csproj 对 Core/Infrastructure 的 ProjectReference，以及 Infrastructure.Tests.csproj 对 Testing 的 ProjectReference；缺失时在本步骤补齐后再编译测试。
 
-- [ ] **Step 4: 实现 ManualTimeProvider**
+- [x] **Step 4: 实现 ManualTimeProvider**
 
 继承 `TimeProvider`，覆盖 `GetUtcNow`、`GetTimestamp`、`TimestampFrequency` 和 `CreateTimer`；`Advance(TimeSpan)` 必须按到期顺序触发一次性/周期计时器，回调在锁外执行并支持 Dispose/Change。测试不得调用真实 `Task.Delay`。
 
-- [ ] **Step 5: 实现 FakeSerialTransport 与模拟设备脚本**
+- [x] **Step 5: 实现 FakeSerialTransport 与模拟设备脚本**
 
 Fake 使用有界接收通道，记录写入的不可变副本；SimulatedModbusDevice 解析写入并可选择正常、延迟、CRC 错误、异常、分段、粘包、无响应或断开。测试工具项目只被测试引用。
 
-- [ ] **Step 6: 实现 ControllableDuplexStream**
+- [x] **Step 6: 实现 ControllableDuplexStream**
 
 支持排入读取块、挂起读取、返回 0、抛 IOException、观察取消和记录写入；用于证明生产 ReadAsync 循环退出和每字节只交付一次。
 
-- [ ] **Step 7: 运行测试并提交**
+- [x] **Step 7: 运行测试并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter "FullyQualifiedName~FakeSerialTransportTests|FullyQualifiedName~ManualTimeProviderTests"`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Serial tests\CH32UpperComputer.Testing tests\CH32UpperComputer.Infrastructure.Tests\Serial`
 Run: `git commit -m "test: add serial abstractions and deterministic fakes"`
+
+**Execution Record (2026-07-17):** 完成不可变串口参数、接收块和 `ISerialTransport`，以及有界
+`FakeSerialTransport`、确定性 `ManualTimeProvider`、可脚本模拟 Modbus 设备和可控双工流。质量审查
+发现模拟设备地址语义和流结束持久性后，已修复错误地址静默、旧地址应答后切换、NoResponse 写已生效、
+非法地址写原子拒绝和持久 EOF。聚焦测试 16/16（初始 9 项 + 缺陷回归 7 项）通过，Debug build
+0 warning/0 error，format verify 通过；实现提交 `2af56be`。该验证发生在用户第二次降低频率之前；
+后续 Task 6～7 不再分别验证，只在完整“串口接收”功能完成后集中验证。
 
 ### Task 6: RTU 接收组帧器（TDD）
 

@@ -12,7 +12,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
     public sealed class FakeSerialTransportTests
     {
         /// <summary>
-        /// 验证每次成功打开均创建全新会话代次，关闭和重复关闭保持幂等。
+        /// 验证打开成功和活动会话关闭都会递增代次，而重复关闭保持幂等。
         /// </summary>
         [Test]
         public async Task OpenAfterClose_ShouldIncrementPortGeneration()
@@ -30,7 +30,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             Assert.Multiple((Action)(() =>
             {
                 Assert.That(firstGeneration, Is.EqualTo(1));
-                Assert.That(transport.PortGeneration, Is.EqualTo(2));
+                Assert.That(transport.PortGeneration, Is.EqualTo(3));
                 Assert.That(transport.IsOpen, Is.True);
             }));
         }

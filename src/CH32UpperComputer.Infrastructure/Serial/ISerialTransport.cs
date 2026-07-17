@@ -11,7 +11,7 @@
         bool IsOpen { get; }
 
         /// <summary>
-        /// 获取最近一次成功打开会话的递增代次，用于隔离关闭前的迟到数据。
+        /// 获取公开端口代次；打开成功和活动会话失效时均递增，用于隔离关闭前的迟到数据。
         /// </summary>
         int PortGeneration { get; }
 

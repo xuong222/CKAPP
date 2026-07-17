@@ -57,7 +57,7 @@ namespace CH32UpperComputer.Testing
         private Session? currentSession;
 
         /// <summary>
-        /// 最近一次成功打开所分配的会话代次。
+        /// 公开端口代次；打开成功与活动会话关闭、断开或释放时均递增。
         /// </summary>
         private int portGeneration;
 
@@ -130,7 +130,7 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
-        /// 获取最近一次成功打开所分配的递增会话代次。
+        /// 获取公开端口代次；打开成功与活动会话失效都会令该值递增。
         /// </summary>
         public int PortGeneration
         {
@@ -255,7 +255,7 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
-        /// 关闭当前模拟会话并完成其接收通道，使全部等待读取确定性退出。
+        /// 关闭当前模拟会话、立即递增公开代次并完成其接收通道，使全部等待读取确定性退出。
         /// </summary>
         /// <param name="cancellationToken">在状态变更前取消关闭操作的令牌。</param>
         /// <returns>同步完成的值任务；重复关闭不会失败。</returns>
@@ -267,7 +267,12 @@ namespace CH32UpperComputer.Testing
             lock (syncRoot)
             {
                 session = currentSession;
-                currentSession = null;
+
+                if (session is not null)
+                {
+                    currentSession = null;
+                    portGeneration = checked(portGeneration + 1);
+                }
             }
 
             session?.ReceiveChannel.Writer.TryComplete();
@@ -347,7 +352,12 @@ namespace CH32UpperComputer.Testing
             {
                 ThrowIfDisposedUnderLock();
                 session = currentSession;
-                currentSession = null;
+
+                if (session is not null)
+                {
+                    currentSession = null;
+                    portGeneration = checked(portGeneration + 1);
+                }
             }
 
             session?.ReceiveChannel.Writer.TryComplete(exception);
@@ -370,7 +380,12 @@ namespace CH32UpperComputer.Testing
 
                 isDisposed = true;
                 session = currentSession;
-                currentSession = null;
+
+                if (session is not null)
+                {
+                    currentSession = null;
+                    portGeneration = checked(portGeneration + 1);
+                }
             }
 
             session?.ReceiveChannel.Writer.TryComplete();

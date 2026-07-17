@@ -101,6 +101,19 @@ namespace CH32UpperComputer.App.Services
         }
 
         /// <summary>
+        /// 立即安排提交当前所有待处理项目；用于安全退出和不依赖真实时间的确定性验证。
+        /// </summary>
+        public void Flush()
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+
+            if (!pendingItems.IsEmpty)
+            {
+                ScheduleDispatch();
+            }
+        }
+
+        /// <summary>
         /// 停止定时器并丢弃尚未提交的界面项目。
         /// </summary>
         public void Dispose()

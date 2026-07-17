@@ -184,6 +184,15 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
+        /// 立即排空日志服务和界面批处理器的待发布项目，不依赖五十毫秒定时器。
+        /// </summary>
+        public void FlushPendingEntries()
+        {
+            logService.FlushPendingPublication();
+            dispatcherBatcher.Flush();
+        }
+
+        /// <summary>
         /// 清空日志服务双缓存和当前可视投影，不影响正在进行的事务。
         /// </summary>
         private void Clear()

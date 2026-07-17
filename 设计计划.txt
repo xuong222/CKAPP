@@ -1,4 +1,4 @@
-设计计划
+﻿设计计划
 ========
 
 [DOCUMENT_METADATA]
@@ -13,7 +13,7 @@ encoding = 所有文本源码、配置、说明和日志统一使用 UTF-8
 code_style = Allman；每个类、函数、函数参数和重要状态均使用中文 XML 注释
 design_status = 用户已确认总体架构、通信模型、UI 第五版、测试及交付方式
 implementation_plan_status = 18 个文件级任务已完成审查并获批准
-implementation_status = Task 1～5 已完成；正在连续构建“串口接收”完整功能的 Task 6～7，完成前不做中间验证
+implementation_status = Task 1～7 已完成；下一完整功能为“发送与事务协调”Task 8～9，完成前不做中间验证
 
 -------------------------------------------------------------------------------
 1. 项目目标
@@ -1213,41 +1213,46 @@ Run: `git commit -m "test: add serial abstractions and deterministic fakes"`
 - Create: `src\CH32UpperComputer.Infrastructure\Framing\ReceivedFrame.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Framing\RtuReceiveFramerTests.cs`
 
-- [ ] **Step 1: 写标准结构失败测试**
+- [x] **Step 1: 写标准结构行为测试**
 
 覆盖：0x03 读取 byte-count 后按 `5+byte-count` 完成；0x06/0x10 为 8 字节；异常帧为 5 字节；计算长度超过 256 立即协议错误。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 按完整功能验证规则延期运行（用户指令替代中间红灯运行）**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~RtuReceiveFramerTests`
 Expected: FAIL，组帧器尚不存在。
 
-- [ ] **Step 3: 实现结构长度累计**
+- [x] **Step 3: 实现结构长度累计**
 
 公开入口只接收完整字节块和单调时间戳，不逐字节触发 UI。内部缓存上限 4096，标准帧上限 256；每拆出一帧分配独立 ReceiveSequence 并继续处理剩余字节。输出必须区分 `StandardFrame`、`RawCrcFrame`、`UnparsedRawCapture` 和 `ReceiveOverflow`，供协调器按事务模式决定完成规则。
 
-- [ ] **Step 4: 写分段、粘包与 CRC 边界失败测试**
+- [x] **Step 4: 写分段、粘包与 CRC 边界行为测试**
 
 覆盖一帧拆成 1/2/N 个块、一次块含两帧、有效帧后跟噪声、未知功能码在 4..256 内扫描最早有效 CRC 并输出 RawCrcFrame、同批后续帧保留为独立候选。
 
-- [ ] **Step 5: 写静默、总超时与溢出失败测试**
+- [x] **Step 5: 写静默、总超时与溢出行为测试**
 
 无法推导长度时，字节间静默、总响应超时或 4096 上限任一成立即结束；已收到字节但无 CRC 时输出 UnparsedRawCapture。完全未收到字节不由 framer 伪造捕获，由协调器判定 TimedOut。溢出返回 ReceiveOverflow、不得把部分帧交给解析器，并丢弃至静默后复位。
 
-- [ ] **Step 6: 运行并确认分段/粘包/静默/溢出行为失败**
+- [x] **Step 6: 按完整功能验证规则延期运行全部接收行为**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~RtuReceiveFramerTests`
 Expected: FAIL，新增组帧行为尚未实现。
 
-- [ ] **Step 7: 实现剩余行为并运行测试**
+- [x] **Step 7: 实现剩余行为并在完整接收完成后集中运行测试**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~RtuReceiveFramerTests`
 Expected: PASS，覆盖标准/原始两种模式、分段、粘包、溢出。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Framing tests\CH32UpperComputer.Infrastructure.Tests\Framing`
 Run: `git commit -m "feat(infra): add bounded Modbus RTU framing"`
+
+**Execution Record (2026-07-17):** 完成标准/原始双模式 RTU 组帧、结构长度推导、CRC 状态、分段与
+粘包拆分、噪声重同步、固定字节间/总超时、截止后迟到数据降级、4096 字节有界溢出和静默恢复。
+遵循用户最新验证频率要求，本 Task 未独立运行中间红灯；与 Task 7 组成完整“串口接收”后一次性集中验证，
+接收定向测试 28/28 通过。提交：`870c8c4`。
 
 ### Task 7: 唯一 BaseStream.ReadAsync 读取路径（TDD）
 
@@ -1257,16 +1262,16 @@ Run: `git commit -m "feat(infra): add bounded Modbus RTU framing"`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Serial\SerialReadPumpTests.cs`
 - Create: `tests\CH32UpperComputer.Infrastructure.Tests\Serial\SerialPortTransportPolicyTests.cs`
 
-- [ ] **Step 1: 写受控 Stream 失败测试**
+- [x] **Step 1: 写受控 Stream 行为测试**
 
 测试 ReadAsync 分段、一次多帧、挂起后取消、挂起后 Dispose、返回 0、IOException 断线；断言每字节只交付一次、ReceiveSequence 单调、循环在 1 秒测试上限内退出。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 按完整功能验证规则延期运行（用户指令替代中间红灯运行）**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~SerialReadPumpTests`
 Expected: FAIL，读取泵尚不存在。
 
-- [ ] **Step 3: 实现读取泵**
+- [x] **Step 3: 实现读取泵**
 
 核心循环等价于：
 
@@ -1285,21 +1290,28 @@ while (!cancellationToken.IsCancellationRequested)
 
 缓冲块固定 512 字节并从 ArrayPool 租用；发布前复制有效区，finally 归还。不得访问 UI Dispatcher。
 
-- [ ] **Step 4: 实现 SerialPortTransport 生命周期**
+- [x] **Step 4: 实现 SerialPortTransport 生命周期**
 
 打开：异步门 -> 创建 SerialPort -> Open -> 取得 BaseStream -> 建立容量 8 的有界 Channel -> 启动唯一 ReadPump。关闭：标记 Closing/递增 PortGeneration -> Cancel -> Close/Dispose -> await pump -> Complete channel。前一循环未退出时 Open 返回明确错误。
 
-- [ ] **Step 5: 加入生产接收 API 禁用检查**
+- [x] **Step 5: 加入生产接收 API 禁用检查**
 
 测试读取 `SerialPortTransport.cs` 源文本或使用架构约束，断言不存在 `.DataReceived +=`、`BytesToRead`、`.Read(`、`.ReadByte(`；只允许 `BaseStream.ReadAsync`。该测试是防止后续回归的策略测试，不替代行为测试。
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 对完整串口接收集中验证并提交**
 
 Run: `dotnet test tests\CH32UpperComputer.Infrastructure.Tests --filter FullyQualifiedName~Serial`
 Expected: PASS，0 failed。
 
 Run: `git add src\CH32UpperComputer.Infrastructure\Serial tests\CH32UpperComputer.Infrastructure.Tests\Serial`
 Run: `git commit -m "feat(infra): add single-loop serial transport"`
+
+**Execution Record (2026-07-17):** 完成固定 512 字节 ArrayPool 缓冲的唯一 `BaseStream.ReadAsync` 循环、
+容量 8 有界接收通道、打开/关闭/自然 EOF/故障/取消生命周期、关闭即换代、旧循环完全退出屏障，以及
+可控流到 RTU 组帧器的端到端接收测试；同步统一 Fake 代次语义。最终集中执行：接收定向测试 28/28，
+`dotnet build CH32UpperComputer.sln -c Debug --no-restore` 为 0 warning/0 error，
+`dotnet format CH32UpperComputer.sln --no-restore --verify-no-changes` 通过。提交：`c78afb9`。真实 USB/COM
+驱动拔插行为留待硬件验收，不伪称已验证。
 
 ### Task 8: 原子事务完成门（TDD）
 

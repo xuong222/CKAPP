@@ -35,13 +35,27 @@ namespace CH32UpperComputer.App.Services
         {
             ArgumentNullException.ThrowIfNull(action);
 
+            if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
             if (dispatcher.CheckAccess())
             {
                 action();
                 return;
             }
 
-            _ = dispatcher.BeginInvoke(action, DispatcherPriority.DataBind);
+            try
+            {
+                _ = dispatcher.BeginInvoke(action, DispatcherPriority.DataBind);
+            }
+            catch (InvalidOperationException) when (
+                dispatcher.HasShutdownStarted ||
+                dispatcher.HasShutdownFinished)
+            {
+                // WPF 生命周期已经结束时丢弃仅用于显示的迟到更新。
+            }
         }
     }
 }

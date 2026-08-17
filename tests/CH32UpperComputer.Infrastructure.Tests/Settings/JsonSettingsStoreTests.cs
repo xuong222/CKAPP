@@ -36,6 +36,8 @@ namespace CH32UpperComputer.Infrastructure.Tests.Settings
                     Assert.That(loaded.SlaveAddress, Is.EqualTo(1));
                     Assert.That(loaded.AutomaticSendOnConnect, Is.False);
                     Assert.That(loaded.PeriodicSendEnabled, Is.False);
+                    Assert.That(loaded.IapTargetAddress, Is.EqualTo("192.168.1.10"));
+                    Assert.That(loaded.IapTcpPort, Is.EqualTo(5000));
                     Assert.That(File.Exists(filePath), Is.False);
                 }));
             }
@@ -73,6 +75,24 @@ namespace CH32UpperComputer.Infrastructure.Tests.Settings
                     LogExportDirectory = Path.Combine(directory, "中文日志"),
                     AutomaticSendOnConnect = true,
                     PeriodicSendEnabled = true,
+                    IapTargetAddress = "192.168.8.20",
+                    IapTcpPort = 6500,
+                    SerialAssistant = new SerialAssistantPreferences
+                    {
+                        PortName = "COM21",
+                        BaudRate = 115200,
+                        DataBits = 7,
+                        Parity = Parity.Odd,
+                        StopBits = StopBits.Two,
+                        SendMode = SerialAssistantDataMode.Hex,
+                        ReceiveMode = SerialAssistantDataMode.Hex,
+                        AppendNewLine = true,
+                        ShowTimestamps = true,
+                        AutoScroll = false,
+                        PeriodicIntervalMilliseconds = 250,
+                        SaveDirectory = Path.Combine(directory, "串口助手"),
+                        LastInput = "E4 B8 AD 0D 0A",
+                    },
                 };
 
                 await store.SaveAsync(settings);
@@ -95,8 +115,81 @@ namespace CH32UpperComputer.Infrastructure.Tests.Settings
                     Assert.That(loaded.AutoAppendCrc, Is.False);
                     Assert.That(loaded.AutomaticSendOnConnect, Is.False);
                     Assert.That(loaded.PeriodicSendEnabled, Is.False);
+                    Assert.That(loaded.IapTargetAddress, Is.EqualTo("192.168.8.20"));
+                    Assert.That(loaded.IapTcpPort, Is.EqualTo(6500));
+                    Assert.That(json, Does.Contain("\"iap_target_address\""));
+                    Assert.That(json, Does.Contain("\"iap_tcp_port\""));
+                    Assert.That(loaded.SerialAssistant.PortName, Is.EqualTo("COM21"));
+                    Assert.That(loaded.SerialAssistant.BaudRate, Is.EqualTo(115200));
+                    Assert.That(loaded.SerialAssistant.SendMode, Is.EqualTo(SerialAssistantDataMode.Hex));
+                    Assert.That(loaded.SerialAssistant.ReceiveMode, Is.EqualTo(SerialAssistantDataMode.Hex));
+                    Assert.That(loaded.SerialAssistant.AppendNewLine, Is.True);
+                    Assert.That(loaded.SerialAssistant.ShowTimestamps, Is.True);
+                    Assert.That(loaded.SerialAssistant.AutoScroll, Is.False);
+                    Assert.That(loaded.SerialAssistant.PeriodicIntervalMilliseconds, Is.EqualTo(250));
+                    Assert.That(loaded.SerialAssistant.LastInput, Is.EqualTo("E4 B8 AD 0D 0A"));
+                    Assert.That(json, Does.Contain("\"serial_assistant\""));
+                    Assert.That(json, Does.Not.Contain("is_connected"));
+                    Assert.That(json, Does.Not.Contain("is_paused"));
+                    Assert.That(json, Does.Not.Contain("periodic_sending"));
                     Assert.That(temporaryFiles, Is.Empty);
                 }));
+            }
+            finally
+            {
+                DeleteTemporaryDirectory(directory);
+            }
+        }
+
+        /// <summary>
+        /// 验证 schema 1 旧文件缺少嵌套助手偏好时直接补默认值，而不是隔离原文件。
+        /// </summary>
+        [Test]
+        public async Task LoadAsync_SchemaOneFileWithoutAssistantPreferences_PreservesFileAndAddsDefaults()
+        {
+            string directory = CreateTemporaryDirectory();
+
+            try
+            {
+                string filePath = Path.Combine(directory, "settings.json");
+                string oldSchemaOneJson =
+                    """
+                    {
+                      "schema_version": 1,
+                      "port_name": "COM5",
+                      "baud_rate": 9600,
+                      "data_bits": 8,
+                      "parity": "None",
+                      "stop_bits": "One",
+                      "slave_address": 1,
+                      "response_timeout_ms": 1000,
+                      "raw_inter_byte_timeout_ms": 20,
+                      "periodic_interval_ms": 1000,
+                      "iap_target_address": "192.168.1.10",
+                      "iap_tcp_port": 5000
+                    }
+                    """;
+                await File.WriteAllTextAsync(
+                    filePath,
+                    oldSchemaOneJson,
+                    new UTF8Encoding(true));
+                JsonSettingsStore store = new(filePath);
+
+                AppSettings loaded = await store.LoadAsync();
+
+                Assert.Multiple(
+                    (Action)(() =>
+                    {
+                        Assert.That(File.Exists(filePath), Is.True);
+                        Assert.That(Directory.GetFiles(directory, "*.corrupt*"), Is.Empty);
+                        Assert.That(loaded.PortName, Is.EqualTo("COM5"));
+                        Assert.That(loaded.SerialAssistant.PortName, Is.EqualTo("COM1"));
+                        Assert.That(loaded.SerialAssistant.BaudRate, Is.EqualTo(115200));
+                        Assert.That(loaded.SerialAssistant.SendMode, Is.EqualTo(SerialAssistantDataMode.Utf8));
+                        Assert.That(loaded.SerialAssistant.ReceiveMode, Is.EqualTo(SerialAssistantDataMode.Utf8));
+                        Assert.That(loaded.SerialAssistant.AutoScroll, Is.True);
+                        Assert.That(loaded.SerialAssistant.PeriodicIntervalMilliseconds, Is.EqualTo(1000));
+                    }));
             }
             finally
             {

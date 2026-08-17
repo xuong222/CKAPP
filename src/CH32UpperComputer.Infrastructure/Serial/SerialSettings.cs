@@ -5,7 +5,7 @@ namespace CH32UpperComputer.Infrastructure.Serial
     /// <summary>
     /// 表示一次串口会话使用的不可变通信参数，并在进入传输层前统一约束可接受范围。
     /// </summary>
-    public sealed class SerialSettings
+    public sealed class SerialSettings : SerialLineSettings
     {
         /// <summary>
         /// 当前设备固件和界面共同支持的波特率集合。
@@ -40,44 +40,13 @@ namespace CH32UpperComputer.Infrastructure.Serial
             StopBits stopBits,
             TimeSpan responseTimeout,
             TimeSpan rawInterByteTimeout)
+            : base(
+                portName,
+                ValidateModbusBaudRate(baudRate),
+                dataBits,
+                parity,
+                stopBits)
         {
-            if (string.IsNullOrWhiteSpace(portName))
-            {
-                throw new ArgumentException("串口名称不能为空。", nameof(portName));
-            }
-
-            if (!SupportedBaudRates.Contains(baudRate))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(baudRate),
-                    baudRate,
-                    "波特率必须为 2400、4800、9600、19200、38400 或 57600。");
-            }
-
-            if (dataBits is < 5 or > 8)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(dataBits),
-                    dataBits,
-                    "数据位数必须位于 5 至 8。");
-            }
-
-            if (!Enum.IsDefined(parity))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(parity),
-                    parity,
-                    "奇偶校验方式必须是已定义的枚举值。");
-            }
-
-            if (!Enum.IsDefined(stopBits) || stopBits == System.IO.Ports.StopBits.None)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(stopBits),
-                    stopBits,
-                    "停止位必须是 SerialPort 支持的 One、Two 或 OnePointFive。");
-            }
-
             ValidateTimeout(
                 responseTimeout,
                 TimeSpan.FromMilliseconds(50),
@@ -91,11 +60,6 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 nameof(rawInterByteTimeout),
                 "原始模式字节间超时");
 
-            PortName = portName.Trim();
-            BaudRate = baudRate;
-            DataBits = dataBits;
-            Parity = parity;
-            StopBits = stopBits;
             ResponseTimeout = responseTimeout;
             RawInterByteTimeout = rawInterByteTimeout;
         }
@@ -118,31 +82,6 @@ namespace CH32UpperComputer.Infrastructure.Serial
         }
 
         /// <summary>
-        /// 获取操作系统串口名称。
-        /// </summary>
-        public string PortName { get; }
-
-        /// <summary>
-        /// 获取线路波特率。
-        /// </summary>
-        public int BaudRate { get; }
-
-        /// <summary>
-        /// 获取每个字符的数据位数。
-        /// </summary>
-        public int DataBits { get; }
-
-        /// <summary>
-        /// 获取奇偶校验方式。
-        /// </summary>
-        public Parity Parity { get; }
-
-        /// <summary>
-        /// 获取停止位设置。
-        /// </summary>
-        public StopBits StopBits { get; }
-
-        /// <summary>
         /// 获取标准事务的响应总超时。
         /// </summary>
         public TimeSpan ResponseTimeout { get; }
@@ -151,6 +90,24 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// 获取原始调试接收的字节间静默超时。
         /// </summary>
         public TimeSpan RawInterByteTimeout { get; }
+
+        /// <summary>
+        /// 校验 Modbus 页面既有的六档波特率范围，并返回可传给通用线路基类的原值。
+        /// </summary>
+        /// <param name="baudRate">待校验的 Modbus 波特率。</param>
+        /// <returns>属于既有六档集合的原始波特率。</returns>
+        private static int ValidateModbusBaudRate(int baudRate)
+        {
+            if (!SupportedBaudRates.Contains(baudRate))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(baudRate),
+                    baudRate,
+                    "波特率必须为 2400、4800、9600、19200、38400 或 57600。");
+            }
+
+            return baudRate;
+        }
 
         /// <summary>
         /// 校验一个有限正超时是否位于闭区间内。

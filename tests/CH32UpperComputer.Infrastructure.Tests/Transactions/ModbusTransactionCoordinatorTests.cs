@@ -71,6 +71,33 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
         }
 
         /// <summary>
+        /// 验证设备在完整请求已经写出、传输调用尚未返回时立即应答，响应仍能完成当前事务。
+        /// </summary>
+        [Test]
+        public async Task ResponseAfterPhysicalWriteBeforeWriteReturns_CompletesCurrentTransaction()
+        {
+            await using CoordinatorHarness harness = await CoordinatorHarness.CreateAsync();
+            TransactionRequest request = CreateReadRequest(TimeSpan.FromMilliseconds(100));
+            FakeWritePause completionPause = harness.Transport.PauseNextWriteCompletion();
+            Task<TransactionExecutionResult> execution = harness.Coordinator
+                .TryExecuteAsync(request, CancellationToken.None)
+                .AsTask();
+            await completionPause.Entered.WaitAsync(TimeSpan.FromSeconds(1));
+
+            await harness.Transport.InjectReceiveAsync(CreateReadResponse(0x002A));
+            await WaitForReceiveSequenceAsync(harness.Coordinator, 1);
+            completionPause.Release();
+            TransactionExecutionResult result = await AwaitExecutionAsync(execution);
+
+            Assert.Multiple((Action)(() =>
+            {
+                Assert.That(result.IsAccepted, Is.True);
+                Assert.That(result.Outcome!.State, Is.EqualTo(TransactionCompletionState.Succeeded));
+                Assert.That(result.Outcome.Response!.Registers.Span[0], Is.EqualTo(0x002A));
+            }));
+        }
+
+        /// <summary>
         /// 验证未连接和应用停止后的请求均在分配事务编号、写串口之前立即拒绝。
         /// </summary>
         [Test]

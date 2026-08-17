@@ -1,0 +1,273 @@
+<UserControl x:Class="CH32UpperComputer.App.Views.SerialAssistantView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DesignHeight="650"
+             d:DesignWidth="1400">
+    <Grid Margin="0,10,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Margin="0,0,0,8"
+                Padding="12"
+                Style="{StaticResource Card}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="230" />
+                    <ColumnDefinition Width="115" />
+                    <ColumnDefinition Width="90" />
+                    <ColumnDefinition Width="120" />
+                    <ColumnDefinition Width="120" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="独立串口" />
+                    <ComboBox ItemsSource="{Binding AvailablePorts}"
+                              IsEditable="True"
+                              IsEnabled="{Binding CanEditSerialSettings}"
+                              DropDownOpened="HandleSerialPortDropDownOpened"
+                              TextSearch.TextPath="PortName"
+                              Text="{Binding PortName, UpdateSourceTrigger=PropertyChanged}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Foreground="{DynamicResource Brush.TextPrimary}"
+                                           Text="{Binding DisplayName}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
+                    <ComboBox ItemsSource="{Binding BaudRates}"
+                              IsEnabled="{Binding CanEditSerialSettings}"
+                              SelectedItem="{Binding BaudRate}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="数据位" />
+                    <ComboBox ItemsSource="{Binding DataBitOptions}"
+                              IsEnabled="{Binding CanEditSerialSettings}"
+                              SelectedItem="{Binding DataBits}" />
+                </StackPanel>
+                <StackPanel Grid.Column="3" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="校验" />
+                    <ComboBox ItemsSource="{Binding ParityOptions}"
+                              IsEnabled="{Binding CanEditSerialSettings}"
+                              SelectedItem="{Binding Parity}" />
+                </StackPanel>
+                <StackPanel Grid.Column="4" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="停止位" />
+                    <ComboBox ItemsSource="{Binding StopBitOptions}"
+                              IsEnabled="{Binding CanEditSerialSettings}"
+                              SelectedItem="{Binding StopBits}" />
+                </StackPanel>
+                <StackPanel Grid.Column="5"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            Orientation="Horizontal">
+                    <Button Margin="0,0,8,0"
+                            Command="{Binding RefreshPortsCommand}"
+                            Content="刷新串口" />
+                    <Button Margin="0,0,8,0"
+                            Style="{StaticResource Button.Primary}"
+                            Command="{Binding ConnectCommand}"
+                            Content="连接" />
+                    <Button Command="{Binding DisconnectCommand}" Content="断开" />
+                </StackPanel>
+
+                <Grid Grid.Row="1" Grid.ColumnSpan="6" Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Foreground="{DynamicResource Brush.TextSecondary}"
+                                   Text="{Binding PortDiscoveryStatus}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Margin="0,2,0,0"
+                                   Foreground="{DynamicResource Brush.Danger}"
+                                   Text="{Binding ErrorMessage}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Margin="12,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.Normal}"
+                               FontWeight="SemiBold"
+                               Text="{Binding ConnectionStatus}" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1"
+                Margin="0,0,0,8"
+                Padding="12"
+                Style="{StaticResource Card}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Margin="0,0,12,0"
+                                   VerticalAlignment="Center"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Text="接收（仅 RX）" />
+                        <TextBlock Margin="0,0,5,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource Text.Muted}"
+                                   Text="显示" />
+                        <ComboBox Width="90"
+                                  Margin="0,0,14,0"
+                                  ItemsSource="{Binding DataModeOptions}"
+                                  SelectedValue="{Binding ReceiveMode}"
+                                  SelectedValuePath="Value">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding DisplayName}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <CheckBox Margin="0,0,14,0"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding ShowTimestamps}"
+                                  Content="时间戳" />
+                        <CheckBox VerticalAlignment="Center"
+                                  IsChecked="{Binding AutoScroll}"
+                                  Content="自动滚动" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding TogglePauseCommand}"
+                                Content="{Binding PauseButtonText}" />
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding ClearCommand}"
+                                Content="清空接收" />
+                        <Button Click="HandleSaveClick" Content="保存当前视图" />
+                    </StackPanel>
+                </Grid>
+                <TextBox x:Name="ReceiveTextBox"
+                         Grid.Row="1"
+                         Padding="10"
+                         AcceptsReturn="True"
+                         AcceptsTab="True"
+                         FontFamily="Consolas"
+                         FontSize="13"
+                         HorizontalScrollBarVisibility="Auto"
+                         IsReadOnly="True"
+                         TextChanged="HandleReceiveTextChanged"
+                         Text="{Binding ReceiveText, Mode=OneWay}"
+                         TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto" />
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Margin="0,0,0,8"
+                Padding="12"
+                Style="{StaticResource Card}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                    <TextBlock Style="{StaticResource Text.Muted}" Text="发送模式" />
+                    <ComboBox ItemsSource="{Binding DataModeOptions}"
+                              IsEnabled="{Binding CanEditPayload}"
+                              SelectedValue="{Binding SendMode}"
+                              SelectedValuePath="Value">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <CheckBox Margin="0,8,0,0"
+                              IsEnabled="{Binding CanEditPayload}"
+                              IsChecked="{Binding AppendNewLine}"
+                              Content="发送新行" />
+                </StackPanel>
+                <TextBox Grid.Column="1"
+                         MinHeight="72"
+                         Padding="8"
+                         AcceptsReturn="True"
+                         FontFamily="Consolas"
+                         HorizontalScrollBarVisibility="Auto"
+                         IsEnabled="{Binding CanEditPayload}"
+                         Text="{Binding SendText, UpdateSourceTrigger=PropertyChanged}"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" />
+                <StackPanel Grid.Column="2" Margin="10,0,0,0" Width="280">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Width="95"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource Text.Muted}"
+                                   Text="定时间隔 ms" />
+                        <TextBox Width="90"
+                                 IsEnabled="{Binding CanEditPayload}"
+                                 Text="{Binding PeriodicIntervalMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                        <Button Margin="0,0,8,0"
+                                Style="{StaticResource Button.Primary}"
+                                Command="{Binding SendCommand}"
+                                Content="发送" />
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding StartPeriodicCommand}"
+                                Content="定时发送" />
+                        <Button Command="{Binding StopPeriodicCommand}" Content="停止" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Padding="10,7" Style="{StaticResource Card}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,18,0"
+                           Foreground="{DynamicResource Brush.Normal}"
+                           FontWeight="SemiBold"
+                           Text="{Binding ConnectionStatus}" />
+                <TextBlock Margin="0,0,18,0" Foreground="{DynamicResource Brush.TextSecondary}">
+                    <Run Text="TX 次数 " />
+                    <Run FontWeight="SemiBold" Text="{Binding TransmitOperationCount}" />
+                </TextBlock>
+                <TextBlock Margin="0,0,18,0" Foreground="{DynamicResource Brush.TextSecondary}">
+                    <Run Text="TX 字节 " />
+                    <Run FontWeight="SemiBold" Text="{Binding TransmitBytes}" />
+                </TextBlock>
+                <TextBlock Margin="0,0,18,0" Foreground="{DynamicResource Brush.TextSecondary}">
+                    <Run Text="RX 字节 " />
+                    <Run FontWeight="SemiBold" Text="{Binding ReceiveBytes}" />
+                </TextBlock>
+                <TextBlock Margin="0,0,18,0" Foreground="{DynamicResource Brush.Warning}">
+                    <Run Text="丢弃 " />
+                    <Run FontWeight="SemiBold" Text="{Binding DiscardedBytes}" />
+                </TextBlock>
+                <TextBlock Foreground="{DynamicResource Brush.TextMuted}">
+                    <Run Text="暂停丢弃 " />
+                    <Run FontWeight="SemiBold" Text="{Binding PausedDiscardedBytes}" />
+                </TextBlock>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

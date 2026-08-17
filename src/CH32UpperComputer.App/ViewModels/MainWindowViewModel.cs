@@ -7,7 +7,7 @@ using System.ComponentModel;
 namespace CH32UpperComputer.App.ViewModels
 {
     /// <summary>
-    /// 聚合主窗口顶部状态和监控、参数、专家工具、日志、系统五个页面 ViewModel。
+    /// 聚合主窗口顶部状态以及实时监控、参数设置、通信日志、固件升级和串口助手五个页面 ViewModel。
     /// </summary>
     public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
@@ -45,9 +45,9 @@ namespace CH32UpperComputer.App.ViewModels
         /// <param name="commandConsole">监控页紧凑收发区 ViewModel。</param>
         /// <param name="monitor">六项数据卡和报警栏 ViewModel。</param>
         /// <param name="parameters">普通参数和安全配置流程 ViewModel。</param>
-        /// <param name="registerTool">专家寄存器工具 ViewModel。</param>
+        /// <param name="firmwareUpgrade">Ethernet IAP 固件升级 ViewModel。</param>
         /// <param name="communicationLog">有界虚拟化日志 ViewModel。</param>
-        /// <param name="systemInfo">本地系统信息 ViewModel。</param>
+        /// <param name="serialAssistant">使用第二套独立传输的普通串口助手 ViewModel。</param>
         /// <param name="operationService">提供最近事务耗时的统一操作服务。</param>
         /// <param name="dispatcher">负责把后台事件投递到界面线程的调度器。</param>
         public MainWindowViewModel(
@@ -55,9 +55,9 @@ namespace CH32UpperComputer.App.ViewModels
             CommandConsoleViewModel commandConsole,
             MonitorViewModel monitor,
             ParametersViewModel parameters,
-            RegisterToolViewModel registerTool,
+            FirmwareUpgradeViewModel firmwareUpgrade,
             CommunicationLogViewModel communicationLog,
-            SystemInfoViewModel systemInfo,
+            SerialAssistantViewModel serialAssistant,
             ModbusOperationService operationService,
             IUiDispatcher dispatcher)
         {
@@ -65,18 +65,18 @@ namespace CH32UpperComputer.App.ViewModels
             ArgumentNullException.ThrowIfNull(commandConsole);
             ArgumentNullException.ThrowIfNull(monitor);
             ArgumentNullException.ThrowIfNull(parameters);
-            ArgumentNullException.ThrowIfNull(registerTool);
+            ArgumentNullException.ThrowIfNull(firmwareUpgrade);
             ArgumentNullException.ThrowIfNull(communicationLog);
-            ArgumentNullException.ThrowIfNull(systemInfo);
+            ArgumentNullException.ThrowIfNull(serialAssistant);
             ArgumentNullException.ThrowIfNull(operationService);
             ArgumentNullException.ThrowIfNull(dispatcher);
             SerialConnection = serialConnection;
             CommandConsole = commandConsole;
             Monitor = monitor;
             Parameters = parameters;
-            RegisterTool = registerTool;
+            FirmwareUpgrade = firmwareUpgrade;
             CommunicationLog = communicationLog;
-            SystemInfo = systemInfo;
+            SerialAssistant = serialAssistant;
             this.operationService = operationService;
             this.dispatcher = dispatcher;
             operationService.MetricsChanged += HandleMetricsChanged;
@@ -104,9 +104,9 @@ namespace CH32UpperComputer.App.ViewModels
         public ParametersViewModel Parameters { get; }
 
         /// <summary>
-        /// 获取专家寄存器工具 ViewModel。
+        /// 获取 Ethernet IAP 固件升级页面 ViewModel。
         /// </summary>
-        public RegisterToolViewModel RegisterTool { get; }
+        public FirmwareUpgradeViewModel FirmwareUpgrade { get; }
 
         /// <summary>
         /// 获取通信日志 ViewModel。
@@ -114,9 +114,9 @@ namespace CH32UpperComputer.App.ViewModels
         public CommunicationLogViewModel CommunicationLog { get; }
 
         /// <summary>
-        /// 获取系统信息 ViewModel。
+        /// 获取使用第二套独立传输的普通串口助手 ViewModel。
         /// </summary>
-        public SystemInfoViewModel SystemInfo { get; }
+        public SerialAssistantViewModel SerialAssistant { get; }
 
         /// <summary>
         /// 获取顶部状态栏显示的串口名称。
@@ -151,11 +151,12 @@ namespace CH32UpperComputer.App.ViewModels
             isDisposed = true;
             operationService.MetricsChanged -= HandleMetricsChanged;
             SerialConnection.PropertyChanged -= HandleSerialConnectionPropertyChanged;
-            RegisterTool.Dispose();
             Parameters.Dispose();
+            FirmwareUpgrade.Dispose();
             Monitor.Dispose();
             CommandConsole.Dispose();
             CommunicationLog.Dispose();
+            SerialAssistant.Dispose();
             SerialConnection.Dispose();
         }
 
@@ -165,6 +166,7 @@ namespace CH32UpperComputer.App.ViewModels
         public void BeginShutdown()
         {
             IsShuttingDown = true;
+            SerialAssistant.BeginShutdown();
         }
 
         /// <summary>

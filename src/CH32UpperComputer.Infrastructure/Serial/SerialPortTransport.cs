@@ -11,6 +11,12 @@ namespace CH32UpperComputer.Infrastructure.Serial
     public sealed class SerialPortTransport : ISerialTransport
     {
         /// <summary>
+        /// 用户断开时等待驱动物理释放的最长前台时间。
+        /// </summary>
+        public static readonly TimeSpan ForegroundCloseTimeout =
+            TimeSpan.FromMilliseconds(750);
+
+        /// <summary>
         /// 每个串口会话允许等待消费的接收块数量。
         /// </summary>
         public const int ReceiveChannelCapacity = 8;
@@ -36,9 +42,19 @@ namespace CH32UpperComputer.Infrastructure.Serial
         private readonly TimeProvider timeProvider;
 
         /// <summary>
-        /// 创建并配置串口对象的工厂；生产默认工厂使用完整 <see cref="SerialSettings"/>。
+        /// 创建并配置串口对象的工厂；生产默认工厂使用完整 <see cref="SerialLineSettings"/>。
         /// </summary>
-        private readonly Func<SerialSettings, SerialPort> serialPortFactory;
+        private readonly Func<SerialLineSettings, SerialPort> serialPortFactory;
+
+        /// <summary>
+        /// 在 Modbus 页面与串口助手之间协调同一物理端口的进程内互斥。
+        /// </summary>
+        private readonly SerialPortUsageRegistry usageRegistry;
+
+        /// <summary>
+        /// 在端口冲突消息中标识当前传输所属页面。
+        /// </summary>
+        private readonly string ownerName;
 
         /// <summary>
         /// 当前可读写会话；关闭开始或读取循环终止后立即置空。
@@ -61,10 +77,19 @@ namespace CH32UpperComputer.Infrastructure.Serial
         private bool isDisposed;
 
         /// <summary>
+        /// 指示旧会话的底层流或串口对象仍在后台释放。
+        /// </summary>
+        private int cleanupPendingFlag;
+
+        /// <summary>
         /// 初始化使用系统时间源和真实串口工厂的生产传输。
         /// </summary>
         public SerialPortTransport()
-            : this(TimeProvider.System, CreateConfiguredSerialPort)
+            : this(
+                TimeProvider.System,
+                CreateConfiguredSerialPort,
+                new SerialPortUsageRegistry(),
+                "串口会话")
         {
         }
 
@@ -73,7 +98,29 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// </summary>
         /// <param name="timeProvider">为接收块提供 UTC 和单调时间戳的统一时间源。</param>
         public SerialPortTransport(TimeProvider timeProvider)
-            : this(timeProvider, CreateConfiguredSerialPort)
+            : this(
+                timeProvider,
+                CreateConfiguredSerialPort,
+                new SerialPortUsageRegistry(),
+                "串口会话")
+        {
+        }
+
+        /// <summary>
+        /// 初始化共享端口占用登记器的真实串口传输。
+        /// </summary>
+        /// <param name="timeProvider">为接收块提供 UTC 和单调时间戳的统一时间源。</param>
+        /// <param name="usageRegistry">供多套传输共享的进程内端口占用登记器。</param>
+        /// <param name="ownerName">在端口冲突消息中显示的当前页面名称。</param>
+        public SerialPortTransport(
+            TimeProvider timeProvider,
+            SerialPortUsageRegistry usageRegistry,
+            string ownerName)
+            : this(
+                timeProvider,
+                CreateConfiguredSerialPort,
+                usageRegistry,
+                ownerName)
         {
         }
 
@@ -85,13 +132,43 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// <exception cref="ArgumentNullException">任一依赖为空时抛出。</exception>
         public SerialPortTransport(
             TimeProvider timeProvider,
-            Func<SerialSettings, SerialPort> serialPortFactory)
+            Func<SerialLineSettings, SerialPort> serialPortFactory)
+            : this(
+                timeProvider,
+                serialPortFactory,
+                new SerialPortUsageRegistry(),
+                "串口会话")
+        {
+        }
+
+        /// <summary>
+        /// 初始化使用可测试工厂、共享占用登记器和明确占用方名称的串口传输。
+        /// </summary>
+        /// <param name="timeProvider">为接收块提供 UTC 和单调时间戳的统一时间源。</param>
+        /// <param name="serialPortFactory">根据不可变线路设置创建串口对象的工厂。</param>
+        /// <param name="usageRegistry">供多套传输共享的进程内端口占用登记器。</param>
+        /// <param name="ownerName">在端口冲突消息中显示的当前页面名称。</param>
+        /// <exception cref="ArgumentException"><paramref name="ownerName"/> 为空时抛出。</exception>
+        /// <exception cref="ArgumentNullException">任一对象依赖为空时抛出。</exception>
+        public SerialPortTransport(
+            TimeProvider timeProvider,
+            Func<SerialLineSettings, SerialPort> serialPortFactory,
+            SerialPortUsageRegistry usageRegistry,
+            string ownerName)
         {
             ArgumentNullException.ThrowIfNull(timeProvider);
             ArgumentNullException.ThrowIfNull(serialPortFactory);
+            ArgumentNullException.ThrowIfNull(usageRegistry);
+
+            if (string.IsNullOrWhiteSpace(ownerName))
+            {
+                throw new ArgumentException("串口占用方名称不能为空。", nameof(ownerName));
+            }
 
             this.timeProvider = timeProvider;
             this.serialPortFactory = serialPortFactory;
+            this.usageRegistry = usageRegistry;
+            this.ownerName = ownerName.Trim();
         }
 
         /// <summary>
@@ -107,6 +184,16 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 }
             }
         }
+
+        /// <summary>
+        /// 获取旧串口会话的物理句柄是否仍在后台释放。
+        /// </summary>
+        public bool IsCleanupPending => Volatile.Read(ref cleanupPendingFlag) != 0;
+
+        /// <summary>
+        /// 在后台物理清理开始或结束时发布新状态。
+        /// </summary>
+        public event Action<bool>? CleanupPendingChanged;
 
         /// <summary>
         /// 获取当前公开端口代次；关闭开始即变化，从而隔离旧会话迟到数据。
@@ -131,7 +218,7 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// <exception cref="InvalidOperationException">已有活动会话或上一读取循环尚未完全退出时抛出。</exception>
         /// <exception cref="ObjectDisposedException">传输对象已经释放时抛出。</exception>
         public async ValueTask OpenAsync(
-            SerialSettings settings,
+            SerialLineSettings settings,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(settings);
@@ -161,8 +248,22 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 await priorCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
 
-                SerialPort serialPort = serialPortFactory(settings) ??
-                    throw new InvalidOperationException("串口工厂返回了空对象。");
+                SerialPortLease? portLease = usageRegistry.Acquire(
+                    settings.PortName,
+                    ownerName);
+                SerialPort serialPort;
+
+                try
+                {
+                    serialPort = serialPortFactory(settings) ??
+                        throw new InvalidOperationException("串口工厂返回了空对象。");
+                }
+                catch
+                {
+                    portLease.Dispose();
+                    throw;
+                }
+
                 Stream? baseStream = null;
 
                 try
@@ -190,7 +291,8 @@ namespace CH32UpperComputer.Infrastructure.Serial
                         serialPort,
                         baseStream,
                         newGeneration,
-                        ReceiveChannelCapacity);
+                        ReceiveChannelCapacity,
+                        portLease);
 
                     lock (stateSyncRoot)
                     {
@@ -207,6 +309,7 @@ namespace CH32UpperComputer.Infrastructure.Serial
 
                     serialPort = null!;
                     baseStream = null;
+                    portLease = null;
                 }
                 finally
                 {
@@ -219,6 +322,8 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     {
                         serialPort.Dispose();
                     }
+
+                    portLease?.Dispose();
                 }
             }
             finally
@@ -231,18 +336,25 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// 把一个非空完整帧异步写入当前会话的基础流并刷新。
         /// </summary>
         /// <param name="frame">待发送的非空完整线路帧。</param>
+        /// <param name="tryBeginWrite">
+        /// 写门和会话复核通过后、调用基础流写入前建立响应边界的同步授权入口。
+        /// </param>
         /// <param name="cancellationToken">取消写门等待、物理写入或刷新。</param>
-        /// <returns>全部字节已经交给基础流并刷新后完成的值任务。</returns>
+        /// <returns>授权成功时在全部字节交给基础流并刷新后完成；授权失败时不写串口并同步结束。</returns>
         /// <exception cref="ArgumentException"><paramref name="frame"/> 为空时抛出。</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="tryBeginWrite"/> 为空时抛出。</exception>
         /// <exception cref="InvalidOperationException">没有活动会话或会话在等待写门期间变化时抛出。</exception>
         public async ValueTask WriteAsync(
             ReadOnlyMemory<byte> frame,
+            Func<bool> tryBeginWrite,
             CancellationToken cancellationToken)
         {
             if (frame.IsEmpty)
             {
                 throw new ArgumentException("发送帧不能为空。", nameof(frame));
             }
+
+            ArgumentNullException.ThrowIfNull(tryBeginWrite);
 
             Session session;
 
@@ -264,6 +376,11 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     {
                         throw new InvalidOperationException("等待发送期间串口会话已经变化。");
                     }
+                }
+
+                if (!tryBeginWrite())
+                {
+                    return;
                 }
 
                 await session.BaseStream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
@@ -374,9 +491,20 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     }
                 }
 
-                session.DisposePhysicalResources();
-                session.ReceiveChannel.Writer.TryComplete();
-                session.DisposeCancellation();
+                Task physicalCleanup = session.StartPhysicalCleanup();
+                SetCleanupPending(true);
+
+                try
+                {
+                    await physicalCleanup.ConfigureAwait(false);
+                }
+                finally
+                {
+                    session.ReceiveChannel.Writer.TryComplete();
+                    session.DisposeCancellation();
+                    session.DisposePortLease();
+                    SetCleanupPending(false);
+                }
             }
         }
 
@@ -408,15 +536,74 @@ namespace CH32UpperComputer.Infrastructure.Serial
             if (session is null)
             {
                 // 后台循环可能刚清空活动会话、但仍在 finally 中释放资源；关闭方必须等待其完全收敛。
-                await completion.ConfigureAwait(false);
+                await WaitForForegroundCleanupAsync(completion).ConfigureAwait(false);
+
+                if (completion.IsCompleted)
+                {
+                    await completion.ConfigureAwait(false);
+                }
+
                 return;
             }
 
             session.RequestCancellation();
-            session.DisposePhysicalResources();
-            await completion.ConfigureAwait(false);
             session.ReceiveChannel.Writer.TryComplete();
-            session.DisposeCancellation();
+            _ = session.StartPhysicalCleanup();
+            SetCleanupPending(true);
+            await WaitForForegroundCleanupAsync(completion).ConfigureAwait(false);
+
+            if (completion.IsCompleted)
+            {
+                await completion.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// 最多等待前台关闭预算；超时后让旧会话清理继续在后台收敛。
+        /// </summary>
+        /// <param name="completion">包含读取循环和物理资源释放的完整会话任务。</param>
+        /// <returns>会话完成或前台等待预算耗尽后的任务。</returns>
+        private static async Task WaitForForegroundCleanupAsync(Task completion)
+        {
+            ArgumentNullException.ThrowIfNull(completion);
+
+            if (completion.IsCompleted)
+            {
+                await completion.ConfigureAwait(false);
+                return;
+            }
+
+            Task delay = Task.Delay(ForegroundCloseTimeout);
+            await Task.WhenAny(completion, delay).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 原子更新后台清理状态，并隔离观察者异常以保护串口生命周期。
+        /// </summary>
+        /// <param name="isPending">存在后台物理清理时为真。</param>
+        private void SetCleanupPending(bool isPending)
+        {
+            int newValue = isPending ? 1 : 0;
+            int previous = Interlocked.Exchange(ref cleanupPendingFlag, newValue);
+
+            if (previous == newValue || CleanupPendingChanged is null)
+            {
+                return;
+            }
+
+            foreach (Action<bool> observer in CleanupPendingChanged
+                .GetInvocationList()
+                .Cast<Action<bool>>())
+            {
+                try
+                {
+                    observer(isPending);
+                }
+                catch (Exception)
+                {
+                    // 观察者失败不得把已经失效的串口会话重新带回前台关闭路径。
+                }
+            }
         }
 
         /// <summary>
@@ -442,7 +629,7 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// </summary>
         /// <param name="settings">已经验证的串口参数。</param>
         /// <returns>尚未打开、等待进入会话生命周期的串口对象。</returns>
-        private static SerialPort CreateConfiguredSerialPort(SerialSettings settings)
+        private static SerialPort CreateConfiguredSerialPort(SerialLineSettings settings)
         {
             return new SerialPort(
                 settings.PortName,
@@ -470,14 +657,24 @@ namespace CH32UpperComputer.Infrastructure.Serial
         private sealed class Session
         {
             /// <summary>
-            /// 指示物理资源是否已经由关闭方或后台循环释放。
+            /// 保护物理资源后台清理任务的唯一创建。
             /// </summary>
-            private int physicalResourcesDisposed;
+            private readonly object physicalCleanupSyncRoot = new();
+
+            /// <summary>
+            /// 当前会话唯一的物理资源后台清理任务。
+            /// </summary>
+            private Task? physicalCleanupTask;
 
             /// <summary>
             /// 指示会话取消源是否已经由自然结束、故障或主动关闭路径释放。
             /// </summary>
             private int cancellationDisposed;
+
+            /// <summary>
+            /// 本会话持有的进程内端口租约，仅在物理清理完成后释放。
+            /// </summary>
+            private SerialPortLease? portLease;
 
             /// <summary>
             /// 初始化一项使用等待背压策略的独立串口会话。
@@ -486,15 +683,19 @@ namespace CH32UpperComputer.Infrastructure.Serial
             /// <param name="baseStream">该串口对象当前会话的基础流。</param>
             /// <param name="generation">本会话唯一端口代次。</param>
             /// <param name="receiveCapacity">接收块通道容量。</param>
+            /// <param name="portLease">必须保持至底层物理句柄完全释放的端口占用租约。</param>
             internal Session(
                 SerialPort serialPort,
                 Stream baseStream,
                 int generation,
-                int receiveCapacity)
+                int receiveCapacity,
+                SerialPortLease portLease)
             {
+                ArgumentNullException.ThrowIfNull(portLease);
                 SerialPort = serialPort;
                 BaseStream = baseStream;
                 Generation = generation;
+                this.portLease = portLease;
                 Cancellation = new CancellationTokenSource();
                 ReceiveChannel = Channel.CreateBounded<SerialReceiveChunk>(
                     new BoundedChannelOptions(receiveCapacity)
@@ -562,15 +763,23 @@ namespace CH32UpperComputer.Infrastructure.Serial
             }
 
             /// <summary>
-            /// 幂等关闭并释放基础流与串口对象，以解除任何挂起读取。
+            /// 幂等启动后台物理清理，使可能阻塞的驱动 Close/Dispose 不占用界面线程。
             /// </summary>
-            internal void DisposePhysicalResources()
+            /// <returns>当前会话唯一的物理清理任务。</returns>
+            internal Task StartPhysicalCleanup()
             {
-                if (Interlocked.Exchange(ref physicalResourcesDisposed, 1) != 0)
+                lock (physicalCleanupSyncRoot)
                 {
-                    return;
+                    physicalCleanupTask ??= Task.Run(DisposePhysicalResourcesCore);
+                    return physicalCleanupTask;
                 }
+            }
 
+            /// <summary>
+            /// 关闭基础流和串口对象，并隔离失效驱动在清理阶段抛出的异常。
+            /// </summary>
+            private void DisposePhysicalResourcesCore()
+            {
                 try
                 {
                     BaseStream.Dispose();
@@ -582,6 +791,10 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 catch (ObjectDisposedException)
                 {
                     // 另一条关闭路径已经释放基础流，幂等收敛即可。
+                }
+                catch (Exception)
+                {
+                    // 驱动清理异常不得阻止串口对象的后续关闭与释放尝试。
                 }
 
                 try
@@ -600,6 +813,10 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 {
                     // 串口已经关闭或未保持有效状态，继续执行释放。
                 }
+                catch (Exception)
+                {
+                    // 非预期驱动关闭异常不得阻止最终 Dispose 尝试。
+                }
 
                 try
                 {
@@ -617,6 +834,10 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 {
                     // 串口状态已经失效，资源释放路径仍视为完成。
                 }
+                catch (Exception)
+                {
+                    // 物理句柄已经从活动会话移出，释放异常仅作为清理失败被隔离。
+                }
             }
 
             /// <summary>
@@ -628,6 +849,15 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 {
                     Cancellation.Dispose();
                 }
+            }
+
+            /// <summary>
+            /// 在底层流和串口对象的物理清理完成后幂等释放进程内端口租约。
+            /// </summary>
+            internal void DisposePortLease()
+            {
+                SerialPortLease? lease = Interlocked.Exchange(ref portLease, null);
+                lease?.Dispose();
             }
         }
     }

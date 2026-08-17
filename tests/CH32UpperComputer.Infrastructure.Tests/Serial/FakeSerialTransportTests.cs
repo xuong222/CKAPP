@@ -69,7 +69,10 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
                 CancellationToken.None);
             byte[] callerFrame = [0x01, 0x03, 0x00, 0x00];
 
-            await transport.WriteAsync(callerFrame, CancellationToken.None);
+            await transport.WriteAsync(
+                callerFrame,
+                static () => true,
+                CancellationToken.None);
             callerFrame[0] = 0xFF;
 
             ReadOnlyMemory<byte> exposedSnapshot = transport.WrittenFrames.Single();

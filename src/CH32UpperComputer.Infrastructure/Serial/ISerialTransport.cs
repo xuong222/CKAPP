@@ -11,6 +11,16 @@
         bool IsOpen { get; }
 
         /// <summary>
+        /// 获取旧串口会话的物理句柄是否仍在后台释放。
+        /// </summary>
+        bool IsCleanupPending { get; }
+
+        /// <summary>
+        /// 在后台物理清理开始或结束时发布新状态。
+        /// </summary>
+        event Action<bool>? CleanupPendingChanged;
+
+        /// <summary>
         /// 获取公开端口代次；打开成功和活动会话失效时均递增，用于隔离关闭前的迟到数据。
         /// </summary>
         int PortGeneration { get; }
@@ -22,17 +32,22 @@
         /// <param name="cancellationToken">取消尚未完成打开操作的令牌。</param>
         /// <returns>表示异步打开操作的值任务。</returns>
         ValueTask OpenAsync(
-            SerialSettings settings,
+            SerialLineSettings settings,
             CancellationToken cancellationToken);
 
         /// <summary>
-        /// 把一项完整线路帧写入当前会话。
+        /// 把一项完整线路帧写入当前会话，并在第一个物理写动作前建立响应接收边界。
         /// </summary>
         /// <param name="frame">待发送的非空完整线路帧。</param>
+        /// <param name="tryBeginWrite">
+        /// 传输层完成写门和会话复核后、开始物理写入前同步调用的授权入口；
+        /// 返回假时必须放弃本次物理写入。
+        /// </param>
         /// <param name="cancellationToken">取消尚未完成写入操作的令牌。</param>
         /// <returns>表示异步写入操作的值任务。</returns>
         ValueTask WriteAsync(
             ReadOnlyMemory<byte> frame,
+            Func<bool> tryBeginWrite,
             CancellationToken cancellationToken);
 
         /// <summary>

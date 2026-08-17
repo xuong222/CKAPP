@@ -211,7 +211,7 @@ try
     $env:CH32_CAPTURE_PATH = "C:\CH32Validation\sandbox-dashboard.png"
     $env:CH32_CAPTURE_AND_EXIT = "1"
     $startParameters = @{
-        FilePath = "C:\CH32Publish\CH32UpperComputer.App.exe"
+        FilePath = "C:\CH32Publish\CKAPP.exe"
         PassThru = $true
     }
     $process = Start-Process @startParameters
@@ -236,7 +236,7 @@ try
         throw "沙盒主窗口截图为空。"
     }
 
-    $hash = Get-FileHash -LiteralPath "C:\CH32Publish\CH32UpperComputer.App.exe" -Algorithm SHA256
+    $hash = Get-FileHash -LiteralPath "C:\CH32Publish\CKAPP.exe" -Algorithm SHA256
     $evidence = @(
         "SELF_CONTAINED_PASS",
         "TimestampUtc=$([DateTimeOffset]::UtcNow.ToString('O'))",

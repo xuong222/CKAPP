@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO;
 using CH32UpperComputer.Core.Protocol;
+using CH32UpperComputer.Infrastructure.Coordination;
 using CH32UpperComputer.Infrastructure.Framing;
 using CH32UpperComputer.Infrastructure.Serial;
 
@@ -188,6 +189,11 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         private readonly TimeProvider timeProvider;
 
         /// <summary>
+        /// 在 Modbus 事务和 Ethernet IAP 流程之间提供应用级互斥。
+        /// </summary>
+        private readonly IApplicationOperationGate applicationOperationGate;
+
+        /// <summary>
         /// 有界保存的最近协调器诊断。
         /// </summary>
         private readonly List<TransactionDiagnostic> diagnostics = [];
@@ -196,6 +202,16 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// 原子活动门；零为空闲，一表示一项事务已被接受且尚未完成 owner 清理。
         /// </summary>
         private int activeTransactionFlag;
+
+        /// <summary>
+        /// 当前持有唯一活动门的独占事务序列租约。
+        /// </summary>
+        private ModbusTransactionSequenceLease? activeSequenceLease;
+
+        /// <summary>
+        /// 独占事务序列持有的应用级 Modbus 租约。
+        /// </summary>
+        private IApplicationOperationLease? activeSequenceApplicationLease;
 
         /// <summary>
         /// 最近分配的事务编号；拒绝项不得递增该值。
@@ -302,15 +318,21 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// </summary>
         /// <param name="transport">可替换为 Fake 的抽象串口传输。</param>
         /// <param name="timeProvider">生产使用系统时间、测试使用手动时间的统一时间源。</param>
+        /// <param name="applicationOperationGate">
+        /// 可选应用级操作门；为空时为该协调器创建独立操作门。
+        /// </param>
         /// <exception cref="ArgumentNullException">任一依赖为空时抛出。</exception>
         public ModbusTransactionCoordinator(
             ISerialTransport transport,
-            TimeProvider timeProvider)
+            TimeProvider timeProvider,
+            IApplicationOperationGate? applicationOperationGate = null)
         {
             ArgumentNullException.ThrowIfNull(transport);
             ArgumentNullException.ThrowIfNull(timeProvider);
             this.transport = transport;
             this.timeProvider = timeProvider;
+            this.applicationOperationGate =
+                applicationOperationGate ?? new ApplicationOperationGate();
         }
 
         /// <summary>
@@ -332,6 +354,11 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// 在接收循环完成当前端口代次数据块的事务路由与诊断处理后发布该块序号。
         /// </summary>
         public event Action<long>? ReceiveSequenceProcessed;
+
+        /// <summary>
+        /// 在迟到、无归属或签名不匹配等诊断进入有界缓存后发布其不可变记录。
+        /// </summary>
+        public event Action<TransactionDiagnostic>? DiagnosticRecorded;
 
         /// <summary>
         /// 获取当前连接与事务状态。
@@ -513,7 +540,82 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             TransactionRequest request,
             CancellationToken cancellationToken)
         {
-            return TryExecuteCoreAsync(request, cancellationToken, null);
+            IApplicationOperationLease? applicationLease =
+                applicationOperationGate.TryEnterModbus();
+
+            if (applicationLease is null)
+            {
+                return ValueTask.FromResult(Reject(TransactionRejected.IapActive));
+            }
+
+            return ExecuteWithApplicationLeaseAsync(
+                request,
+                cancellationToken,
+                null,
+                applicationLease);
+        }
+
+        /// <summary>
+        /// 尝试立即占用唯一活动门并创建一个不排队的独占事务序列。
+        /// </summary>
+        /// <returns>成功时返回独占租约；Busy、断开、重同步或退出时返回空值。</returns>
+        public ModbusTransactionSequenceLease? TryAcquireSequence()
+        {
+            IApplicationOperationLease? applicationLease =
+                applicationOperationGate.TryEnterModbus();
+
+            if (applicationLease is null)
+            {
+                _ = Reject(TransactionRejected.IapActive);
+                return null;
+            }
+
+            TransactionRejected initialRejection = GetCurrentRejection();
+
+            if (initialRejection != TransactionRejected.None)
+            {
+                applicationLease.Dispose();
+                _ = Reject(initialRejection);
+                return null;
+            }
+
+            if (Interlocked.CompareExchange(ref activeTransactionFlag, 1, 0) != 0)
+            {
+                applicationLease.Dispose();
+                _ = Reject(TransactionRejected.Busy);
+                return null;
+            }
+
+            ModbusTransactionSequenceLease? lease = null;
+            TransactionRejected guardedRejection;
+
+            lock (stateSyncRoot)
+            {
+                guardedRejection = GetCurrentRejectionUnderLock();
+
+                if (guardedRejection == TransactionRejected.None &&
+                    activeSequenceLease is null &&
+                    activeContext is null)
+                {
+                    lease = new ModbusTransactionSequenceLease(this);
+                    activeSequenceLease = lease;
+                    activeSequenceApplicationLease = applicationLease;
+                }
+            }
+
+            if (lease is null)
+            {
+                applicationLease.Dispose();
+                Interlocked.Exchange(ref activeTransactionFlag, 0);
+                _ = Reject(
+                    guardedRejection == TransactionRejected.None
+                        ? TransactionRejected.Busy
+                        : guardedRejection);
+                return null;
+            }
+
+            PublishBusyChanged(true);
+            return lease;
         }
 
         /// <summary>
@@ -529,7 +631,99 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             Func<Func<ValueTask>, ValueTask?> tryStartWrite)
         {
             ArgumentNullException.ThrowIfNull(tryStartWrite);
-            return TryExecuteCoreAsync(request, CancellationToken.None, tryStartWrite);
+            IApplicationOperationLease? applicationLease =
+                applicationOperationGate.TryEnterModbus();
+
+            if (applicationLease is null)
+            {
+                return ValueTask.FromResult(Reject(TransactionRejected.IapActive));
+            }
+
+            return ExecuteWithApplicationLeaseAsync(
+                request,
+                CancellationToken.None,
+                tryStartWrite,
+                applicationLease);
+        }
+
+        /// <summary>
+        /// 在指定独占序列租约持有唯一活动门期间执行一项顺序事务。
+        /// </summary>
+        /// <param name="lease">当前协调器创建且尚未释放的独占租约。</param>
+        /// <param name="request">需要执行的不可变事务请求。</param>
+        /// <param name="cancellationToken">取消当前事务的令牌。</param>
+        /// <returns>事务唯一终态或连接状态拒绝结果。</returns>
+        internal ValueTask<TransactionExecutionResult> TryExecuteWithinSequenceAsync(
+            ModbusTransactionSequenceLease lease,
+            TransactionRequest request,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(lease);
+            return TryExecuteCoreAsync(
+                request,
+                cancellationToken,
+                null,
+                lease);
+        }
+
+        /// <summary>
+        /// 释放指定独占事务序列持有的唯一活动门。
+        /// </summary>
+        /// <param name="lease">当前协调器创建且已结束内部事务的租约。</param>
+        internal void ReleaseSequenceLease(ModbusTransactionSequenceLease lease)
+        {
+            ArgumentNullException.ThrowIfNull(lease);
+            bool released = false;
+            IApplicationOperationLease? applicationLease = null;
+
+            lock (stateSyncRoot)
+            {
+                if (ReferenceEquals(activeSequenceLease, lease) &&
+                    activeContext is null)
+                {
+                    activeSequenceLease = null;
+                    applicationLease = activeSequenceApplicationLease;
+                    activeSequenceApplicationLease = null;
+                    released = true;
+                }
+            }
+
+            if (!released)
+            {
+                throw new InvalidOperationException("独占事务序列不属于当前协调器或仍有事务未收敛。");
+            }
+
+            Interlocked.Exchange(ref activeTransactionFlag, 0);
+            applicationLease?.Dispose();
+            PublishBusyChanged(false);
+        }
+
+        /// <summary>
+        /// 在普通或定时事务完成后保证应用级 Modbus 租约释放。
+        /// </summary>
+        /// <param name="request">需要提交的事务请求。</param>
+        /// <param name="cancellationToken">取消当前事务。</param>
+        /// <param name="tryStartWrite">定时服务可选的原子写入授权入口。</param>
+        /// <param name="applicationLease">已经取得的应用级 Modbus 租约。</param>
+        /// <returns>事务终态或立即拒绝结果。</returns>
+        private async ValueTask<TransactionExecutionResult> ExecuteWithApplicationLeaseAsync(
+            TransactionRequest request,
+            CancellationToken cancellationToken,
+            Func<Func<ValueTask>, ValueTask?>? tryStartWrite,
+            IApplicationOperationLease applicationLease)
+        {
+            try
+            {
+                return await TryExecuteCoreAsync(
+                    request,
+                    cancellationToken,
+                    tryStartWrite,
+                    null).ConfigureAwait(false);
+            }
+            finally
+            {
+                applicationLease.Dispose();
+            }
         }
 
         /// <summary>
@@ -540,11 +734,15 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// <param name="tryStartWrite">
         /// 定时计划可选的授权并启动写入口；手动事务为空并直接启动写调用。
         /// </param>
+        /// <param name="sequenceLease">
+        /// 可选的无队列独占序列租约；为空时本次请求自行竞争全局活动门。
+        /// </param>
         /// <returns>接受事务的最终结果，或未分配 TransactionId 的立即拒绝结果。</returns>
         private async ValueTask<TransactionExecutionResult> TryExecuteCoreAsync(
             TransactionRequest request,
             CancellationToken cancellationToken,
-            Func<Func<ValueTask>, ValueTask?>? tryStartWrite)
+            Func<Func<ValueTask>, ValueTask?>? tryStartWrite,
+            ModbusTransactionSequenceLease? sequenceLease)
         {
             ArgumentNullException.ThrowIfNull(request);
             TransactionRejected initialRejection = GetCurrentRejection();
@@ -554,9 +752,30 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                 return Reject(initialRejection);
             }
 
-            if (Interlocked.CompareExchange(ref activeTransactionFlag, 1, 0) != 0)
+            bool ownsActivityGate = sequenceLease is null;
+
+            if (ownsActivityGate &&
+                Interlocked.CompareExchange(ref activeTransactionFlag, 1, 0) != 0)
             {
                 return Reject(TransactionRejected.Busy);
+            }
+
+            if (!ownsActivityGate)
+            {
+                bool validLease;
+
+                lock (stateSyncRoot)
+                {
+                    validLease = ReferenceEquals(activeSequenceLease, sequenceLease) &&
+                        sequenceLease is not null &&
+                        !sequenceLease.IsDisposed &&
+                        activeContext is null;
+                }
+
+                if (!validLease)
+                {
+                    return Reject(TransactionRejected.Busy);
+                }
             }
 
             ActiveTransactionContext? context = null;
@@ -595,8 +814,11 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                 ActiveTransactionContext acceptedContext = context ??
                     throw new InvalidOperationException("事务活动门已接受请求，但没有创建事务上下文。");
                 PublishStateChanged(sendingState);
-                PublishBusyChanged(true);
-                publishedBusy = true;
+                if (ownsActivityGate)
+                {
+                    PublishBusyChanged(true);
+                    publishedBusy = true;
+                }
                 acceptedContext.SetCancellationRegistration(
                     cancellationToken.Register(
                         static state =>
@@ -643,7 +865,10 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                     PublishStateChanged(changedState);
                 }
 
-                Interlocked.Exchange(ref activeTransactionFlag, 0);
+                if (ownsActivityGate)
+                {
+                    Interlocked.Exchange(ref activeTransactionFlag, 0);
+                }
 
                 if (publishedBusy)
                 {
@@ -742,7 +967,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         }
 
         /// <summary>
-        /// 异步写入请求，并在写入成功后记录发送边界、启动组帧器和响应总计时器。
+        /// 异步写入请求，并由传输层在首个物理写动作前建立接收边界、组帧器和响应总计时器。
         /// </summary>
         /// <param name="context">当前唯一活动事务上下文。</param>
         /// <param name="cancellationToken">取消物理写入的调用方令牌。</param>
@@ -769,6 +994,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                     context.MarkWriteAttempted();
                     writeOperation = transport.WriteAsync(
                         context.Request.Frame,
+                        () => TryArmResponseCapture(context),
                         cancellationToken);
                 }
                 else
@@ -779,6 +1005,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                             context.MarkWriteAttempted();
                             return transport.WriteAsync(
                                 context.Request.Frame,
+                                () => TryArmResponseCapture(context),
                                 cancellationToken);
                         });
 
@@ -856,21 +1083,34 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                 return;
             }
 
-            if (context.Pending.CompletionState != TransactionCompletionState.Pending)
+            if (context.Pending.CompletionState == TransactionCompletionState.Pending &&
+                !context.IsArmed)
             {
-                return;
-            }
-
-            if (!transport.IsOpen || transport.PortGeneration != context.PortGeneration)
-            {
-                TryComplete(
+                bool won = TryComplete(
                     context,
-                    TransactionCompletionState.Disconnected,
-                    "请求写入后端口代次已经失效。",
+                    TransactionCompletionState.WriteFailed,
+                    "传输写入已经返回，但没有建立响应接收边界。",
                     null,
                     null,
                     null);
-                return;
+
+                if (won)
+                {
+                    BeginResynchronization(context, "请求写入边界缺失，隔离潜在响应。");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 在传输层即将开始第一个物理写动作时，原子建立接收序号、组帧器和响应总截止边界。
+        /// </summary>
+        /// <param name="context">当前准备物理写入的唯一活动事务上下文。</param>
+        /// <returns>边界建立成功且仍应执行物理写入时返回 <see langword="true"/>。</returns>
+        private bool TryArmResponseCapture(ActiveTransactionContext context)
+        {
+            if (!IsCurrentPendingContext(context))
+            {
+                return false;
             }
 
             try
@@ -886,7 +1126,6 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                         : RtuFramingMode.RawDebug,
                     context.PortGeneration,
                     sentTimestamp);
-                context.Arm(sentAfterReceiveSequence, sentTimestamp, deadlineTimestamp);
                 TransactionCoordinatorState? waitingState = null;
                 bool lifecycleInvalid;
 
@@ -900,52 +1139,44 @@ namespace CH32UpperComputer.Infrastructure.Transactions
 
                     if (!lifecycleInvalid)
                     {
-                        waitingState = SetStateUnderLock(TransactionCoordinatorState.WaitingResponse);
+                        context.Arm(
+                            sentAfterReceiveSequence,
+                            sentTimestamp,
+                            deadlineTimestamp);
+                        waitingState = SetStateUnderLock(
+                            TransactionCoordinatorState.WaitingResponse);
                     }
                 }
 
                 if (lifecycleInvalid)
                 {
-                    TryComplete(
-                        context,
-                        TransactionCompletionState.Disconnected,
-                        "响应等待状态建立前串口生命周期已经失效。",
-                        null,
-                        null,
-                        null);
-                    return;
+                    return false;
                 }
 
+                ITimer responseTimer = timeProvider.CreateTimer(
+                    static state =>
+                    {
+                        TimerCallbackState callbackState = (TimerCallbackState)state!;
+                        callbackState.Coordinator.HandleResponseTimeout(callbackState.Context);
+                    },
+                    new TimerCallbackState(this, context),
+                    context.Request.ResponseTimeout,
+                    Timeout.InfiniteTimeSpan);
+                context.SetResponseTimer(responseTimer);
                 PublishStateChanged(waitingState);
-
-                if (context.Pending.CompletionState == TransactionCompletionState.Pending)
-                {
-                    ITimer responseTimer = timeProvider.CreateTimer(
-                        static state =>
-                        {
-                            TimerCallbackState callbackState = (TimerCallbackState)state!;
-                            callbackState.Coordinator.HandleResponseTimeout(callbackState.Context);
-                        },
-                        new TimerCallbackState(this, context),
-                        context.Request.ResponseTimeout,
-                        Timeout.InfiniteTimeSpan);
-                    context.SetResponseTimer(responseTimer);
-                }
+                return context.Pending.CompletionState ==
+                    TransactionCompletionState.Pending;
             }
             catch (Exception exception)
             {
-                bool won = TryComplete(
+                TryComplete(
                     context,
                     TransactionCompletionState.WriteFailed,
-                    "请求已经写入，但响应等待边界初始化失败。",
+                    "物理写入前无法建立响应等待边界。",
                     null,
                     null,
                     exception);
-
-                if (won)
-                {
-                    BeginResynchronization(context, "请求已写入但等待状态不确定，隔离潜在响应。");
-                }
+                return false;
             }
         }
 
@@ -1806,6 +2037,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                 TransactionRejected.NotConnected => "串口尚未连接或接收循环未启动。",
                 TransactionRejected.Resynchronizing => "上一响应可能迟到，正在等待完整静默窗口。",
                 TransactionRejected.ApplicationStopping => "应用正在退出，不能再发送请求。",
+                TransactionRejected.IapActive => "固件升级进行中，Modbus 操作已暂停。",
                 _ => throw new ArgumentOutOfRangeException(nameof(rejection)),
             };
             RecordDiagnostic(
@@ -1894,6 +2126,36 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                 }
 
                 diagnostics.Add(diagnostic);
+            }
+
+            PublishDiagnosticRecorded(diagnostic);
+        }
+
+        /// <summary>
+        /// 逐个发布新增诊断；观察者失败不得递归产生第二项诊断或破坏通信线程。
+        /// </summary>
+        /// <param name="diagnostic">已经进入有界缓存的不可变诊断。</param>
+        private void PublishDiagnosticRecorded(TransactionDiagnostic diagnostic)
+        {
+            Action<TransactionDiagnostic>? observers = DiagnosticRecorded;
+
+            if (observers is null)
+            {
+                return;
+            }
+
+            foreach (Action<TransactionDiagnostic> observer in observers
+                .GetInvocationList()
+                .Cast<Action<TransactionDiagnostic>>())
+            {
+                try
+                {
+                    observer(diagnostic);
+                }
+                catch (Exception)
+                {
+                    // 诊断观察者故障不能递归写入诊断，否则可能形成无限发布链。
+                }
             }
         }
 
@@ -2128,12 +2390,12 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             internal RtuReceiveFramer Framer { get; }
 
             /// <summary>
-            /// 获取发送完成后观察到的最后接收序号，候选必须严格大于该值。
+            /// 获取首个物理写动作开始前观察到的最后接收序号，候选必须严格大于该值。
             /// </summary>
             internal long SentAfterReceiveSequence { get; private set; }
 
             /// <summary>
-            /// 获取发送完成时的单调时间戳。
+            /// 获取首个物理写动作开始前的单调时间戳。
             /// </summary>
             internal long SentTimestamp { get; private set; }
 
@@ -2161,10 +2423,10 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             }
 
             /// <summary>
-            /// 记录发送后的接收序号与单调截止，并发布已武装状态。
+            /// 记录物理写入边界前的接收序号与单调截止，并发布已武装状态。
             /// </summary>
-            /// <param name="sentAfterReceiveSequence">发送后观察到的末接收序号。</param>
-            /// <param name="sentTimestamp">发送完成单调时间戳。</param>
+            /// <param name="sentAfterReceiveSequence">首个物理写动作前观察到的末接收序号。</param>
+            /// <param name="sentTimestamp">首个物理写动作开始前的单调时间戳。</param>
             /// <param name="deadlineTimestamp">严格排他的响应截止时间戳。</param>
             internal void Arm(
                 long sentAfterReceiveSequence,

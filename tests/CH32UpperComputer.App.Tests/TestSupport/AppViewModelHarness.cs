@@ -1,6 +1,8 @@
 ﻿using CH32UpperComputer.App.Services;
 using CH32UpperComputer.App.ViewModels;
 using CH32UpperComputer.Core.Registers;
+using CH32UpperComputer.Infrastructure.Coordination;
+using CH32UpperComputer.Infrastructure.Iap;
 using CH32UpperComputer.Infrastructure.Logging;
 using CH32UpperComputer.Infrastructure.Serial;
 using CH32UpperComputer.Infrastructure.Settings;
@@ -27,10 +29,27 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         {
             TimeProvider = new ManualTimeProvider();
             Transport = new FakeSerialTransport(TimeProvider);
-            Coordinator = new ModbusTransactionCoordinator(Transport, TimeProvider);
-            Periodic = new PeriodicSendService(Coordinator, TimeProvider);
+            AssistantTransport = new FakeSerialTransport(TimeProvider);
+            ApplicationOperationGate = new ApplicationOperationGate();
+            Coordinator = new ModbusTransactionCoordinator(
+                Transport,
+                TimeProvider,
+                ApplicationOperationGate);
+            Periodic = new PeriodicSendService(
+                Coordinator,
+                TimeProvider,
+                ApplicationOperationGate);
             LogService = new CommunicationLogService(TimeProvider);
             Dispatcher = new ImmediateUiDispatcher();
+            PortDiscovery = new FakeSerialPortDiscovery(
+                new[]
+                {
+                    new SerialPortDescriptor(
+                        "COM_TEST",
+                        "模拟串口 (COM_TEST)",
+                        null,
+                        false),
+                });
             DeviceSnapshot snapshot = new();
             OperationService = new ModbusOperationService(
                 Coordinator,
@@ -41,33 +60,66 @@ namespace CH32UpperComputer.App.Tests.TestSupport
             SerialConnection = new SerialConnectionViewModel(
                 Transport,
                 Coordinator,
+                PortDiscovery,
                 Dispatcher,
-                settings);
+                settings,
+                ApplicationOperationGate);
+            SerialAssistantService = new SerialAssistantSessionService(
+                AssistantTransport,
+                TimeProvider);
+            SerialAssistant = new SerialAssistantViewModel(
+                SerialAssistantService,
+                PortDiscovery,
+                Dispatcher,
+                settings.SerialAssistant);
             SpecialConfiguration = new SpecialConfigurationService(
                 Coordinator,
                 Periodic,
                 Transport,
                 checked((byte)settings.SlaveAddress),
                 SerialConnection.CreateSerialSettings());
+            SpecialConfiguration.TransactionRecorded +=
+                OperationService.RecordExternalResult;
             CommandConsole = new CommandConsoleViewModel(
                 OperationService,
                 Periodic,
                 SerialConnection,
                 Dispatcher,
-                settings);
+                settings,
+                ApplicationOperationGate);
             Monitor = new MonitorViewModel(OperationService, Dispatcher);
             Parameters = new ParametersViewModel(
                 CommandConsole,
                 SerialConnection,
                 SpecialConfiguration,
                 OperationService,
-                Dispatcher);
-            RegisterTool = new RegisterToolViewModel(
-                CommandConsole,
-                SerialConnection,
-                SpecialConfiguration,
-                OperationService,
-                Dispatcher);
+                Dispatcher,
+                ApplicationOperationGate);
+            CommunicationLog = new CommunicationLogViewModel(
+                LogService,
+                Dispatcher,
+                TimeProvider,
+                string.Empty);
+            IapLogService = new IapCommunicationLogService(TimeProvider);
+            IapTransport = new TcpIapTransport(TimeProvider);
+            IapProtocolClient = new IapProtocolClient(
+                IapTransport,
+                IapLogService,
+                TimeProvider);
+            IapCoordinator = new IapUpgradeCoordinator(
+                IapProtocolClient,
+                IapLogService,
+                ApplicationOperationGate,
+                TimeProvider);
+            FirmwareUpgrade = new FirmwareUpgradeViewModel(
+                new FirmwareFileService(),
+                IapCoordinator,
+                IapLogService,
+                Periodic,
+                ApplicationOperationGate,
+                Dispatcher,
+                TimeProvider,
+                settings);
             Device = new SimulatedModbusDevice(Transport, TimeProvider);
         }
 
@@ -80,6 +132,16 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         /// 获取可注入响应且记录完整写帧的模拟串口。
         /// </summary>
         internal FakeSerialTransport Transport { get; }
+
+        /// <summary>
+        /// 获取与 Modbus 模拟传输完全独立的串口助手模拟传输。
+        /// </summary>
+        internal FakeSerialTransport AssistantTransport { get; }
+
+        /// <summary>
+        /// 获取测试环境共享的 Modbus/IAP 应用操作门。
+        /// </summary>
+        internal ApplicationOperationGate ApplicationOperationGate { get; }
 
         /// <summary>
         /// 获取无队列事务协调器。
@@ -102,6 +164,11 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         internal ImmediateUiDispatcher Dispatcher { get; }
 
         /// <summary>
+        /// 获取不访问操作系统设备管理器的模拟串口发现服务。
+        /// </summary>
+        internal FakeSerialPortDiscovery PortDiscovery { get; }
+
+        /// <summary>
         /// 获取统一事务、快照、日志和统计服务。
         /// </summary>
         internal ModbusOperationService OperationService { get; }
@@ -110,6 +177,16 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         /// 获取串口连接 ViewModel。
         /// </summary>
         internal SerialConnectionViewModel SerialConnection { get; }
+
+        /// <summary>
+        /// 获取独占第二套模拟传输的助手会话服务。
+        /// </summary>
+        internal SerialAssistantSessionService SerialAssistantService { get; }
+
+        /// <summary>
+        /// 获取普通串口助手 ViewModel。
+        /// </summary>
+        internal SerialAssistantViewModel SerialAssistant { get; }
 
         /// <summary>
         /// 获取紧凑收发区 ViewModel。
@@ -127,9 +204,34 @@ namespace CH32UpperComputer.App.Tests.TestSupport
         internal ParametersViewModel Parameters { get; }
 
         /// <summary>
-        /// 获取专家寄存器工具 ViewModel。
+        /// 获取与实时监控“数据收发”区域共用的通信日志投影。
         /// </summary>
-        internal RegisterToolViewModel RegisterTool { get; }
+        internal CommunicationLogViewModel CommunicationLog { get; }
+
+        /// <summary>
+        /// 获取独立 IAP 日志服务。
+        /// </summary>
+        internal IapCommunicationLogService IapLogService { get; }
+
+        /// <summary>
+        /// 获取测试使用的未主动联网 TCP IAP 传输。
+        /// </summary>
+        internal TcpIapTransport IapTransport { get; }
+
+        /// <summary>
+        /// 获取 IAP 顺序协议客户端。
+        /// </summary>
+        internal IapProtocolClient IapProtocolClient { get; }
+
+        /// <summary>
+        /// 获取完整 IAP 升级协调器。
+        /// </summary>
+        internal IapUpgradeCoordinator IapCoordinator { get; }
+
+        /// <summary>
+        /// 获取固件升级页面 ViewModel。
+        /// </summary>
+        internal FirmwareUpgradeViewModel FirmwareUpgrade { get; }
 
         /// <summary>
         /// 获取安全配置服务。
@@ -161,6 +263,10 @@ namespace CH32UpperComputer.App.Tests.TestSupport
                 AutoAppendCrc = true,
                 AutomaticSendOnConnect = false,
                 PeriodicSendEnabled = false,
+                SerialAssistant = new SerialAssistantPreferences
+                {
+                    PortName = "COM_ASSISTANT",
+                },
             };
             return new AppViewModelHarness(settings);
         }
@@ -236,19 +342,28 @@ namespace CH32UpperComputer.App.Tests.TestSupport
             }
 
             await Periodic.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            SerialAssistant.BeginShutdown();
+            await SerialAssistantService.StopPeriodicSendingAsync().ConfigureAwait(false);
+            await SerialAssistantService.DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
+            await IapCoordinator.CancelAsync(CancellationToken.None).ConfigureAwait(false);
             await Coordinator.StopAsync(CancellationToken.None).ConfigureAwait(false);
             await Coordinator.WaitForBackgroundOperationsAsync(CancellationToken.None)
                 .ConfigureAwait(false);
             await OperationService.WaitForOperationsAsync(CancellationToken.None)
                 .ConfigureAwait(false);
-            RegisterTool.Dispose();
+            CommunicationLog.Dispose();
+            SerialAssistant.Dispose();
+            FirmwareUpgrade.Dispose();
             Parameters.Dispose();
             Monitor.Dispose();
             CommandConsole.Dispose();
             SerialConnection.Dispose();
+            OperationService.Dispose();
             await Periodic.DisposeAsync().ConfigureAwait(false);
             await Coordinator.DisposeAsync().ConfigureAwait(false);
             await Transport.DisposeAsync().ConfigureAwait(false);
+            await SerialAssistantService.DisposeAsync().ConfigureAwait(false);
+            await IapCoordinator.DisposeAsync().ConfigureAwait(false);
             LogService.Dispose();
         }
 

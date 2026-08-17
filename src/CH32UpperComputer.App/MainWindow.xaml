@@ -28,7 +28,7 @@
                 <TextBlock Style="{StaticResource Text.PageTitle}" Text="CH32 工业监控上位机" />
                 <TextBlock Margin="0,5,0,0"
                            Style="{StaticResource Text.Caption}"
-                           Text="Modbus-RTU · 单事务协调 · 连接后等待手动指令" />
+                           Text="Modbus-RTU · Ethernet IAP · 连接后等待手动指令" />
             </StackPanel>
             <Border Grid.Column="1"
                     Style="{StaticResource Card}"
@@ -61,12 +61,18 @@
             </Border>
         </Grid>
 
-        <Expander Grid.Row="1"
+        <Expander x:Name="SerialSettingsExpander"
+                  Grid.Row="1"
                   Margin="0,0,0,10"
                   Foreground="{DynamicResource Brush.TextSecondary}"
-                  Header="串口与连接设置（展开）">
+                  Header="Modbus 串口与连接设置（展开）"
+                  Expanded="HandleSerialSettingsExpanded">
             <Border Margin="0,8,0,0" Style="{StaticResource Card}" Padding="14">
                 <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="130" />
                         <ColumnDefinition Width="115" />
@@ -75,48 +81,61 @@
                         <ColumnDefinition Width="120" />
                         <ColumnDefinition Width="95" />
                         <ColumnDefinition Width="125" />
-                        <ColumnDefinition Width="125" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
-                        <ComboBox ItemsSource="{Binding SerialConnection.AvailablePorts}"
+                        <ComboBox x:Name="SerialPortComboBox"
+                                  ItemsSource="{Binding SerialConnection.AvailablePorts}"
+                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
                                   IsEditable="True"
-                                  Text="{Binding SerialConnection.PortName, UpdateSourceTrigger=PropertyChanged}" />
+                                  DropDownOpened="HandleSerialPortDropDownOpened"
+                                  TextSearch.TextPath="PortName"
+                                  Text="{Binding SerialConnection.PortName, UpdateSourceTrigger=PropertyChanged}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Foreground="{DynamicResource Brush.TextPrimary}"
+                                               Text="{Binding DisplayName}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
                         <ComboBox ItemsSource="{Binding SerialConnection.BaudRates}"
+                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
                                   SelectedItem="{Binding SerialConnection.BaudRate}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="数据位" />
                         <ComboBox ItemsSource="{Binding SerialConnection.DataBitOptions}"
+                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
                                   SelectedItem="{Binding SerialConnection.DataBits}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="校验" />
                         <ComboBox ItemsSource="{Binding SerialConnection.ParityOptions}"
+                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
                                   SelectedItem="{Binding SerialConnection.Parity}" />
                     </StackPanel>
                     <StackPanel Grid.Column="4" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="停止位" />
                         <ComboBox ItemsSource="{Binding SerialConnection.StopBitOptions}"
+                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
                                   SelectedItem="{Binding SerialConnection.StopBits}" />
                     </StackPanel>
                     <StackPanel Grid.Column="5" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="从站地址" />
-                        <TextBox Text="{Binding SerialConnection.SlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                 Text="{Binding SerialConnection.SlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
                     <StackPanel Grid.Column="6" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource Text.Muted}" Text="总超时 ms" />
-                        <TextBox Text="{Binding SerialConnection.ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                 Text="{Binding SerialConnection.ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
-                    <StackPanel Grid.Column="7" Margin="0,0,10,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="字节静默 ms" />
-                        <TextBox Text="{Binding SerialConnection.RawInterByteTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Bottom">
                         <Button Margin="0,0,8,0"
                                 Command="{Binding SerialConnection.RefreshPortsCommand}"
                                 Content="刷新串口" />
@@ -129,25 +148,38 @@
                                 Content="连接" />
                         <Button Command="{Binding SerialConnection.DisconnectCommand}" Content="断开" />
                     </StackPanel>
+                    <StackPanel Grid.Row="1"
+                                Grid.ColumnSpan="8"
+                                Margin="0,10,0,0">
+                        <TextBlock Foreground="{DynamicResource Brush.TextSecondary}"
+                                   Text="{Binding SerialConnection.PortDiscoveryStatus}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Margin="0,3,0,0"
+                                   Foreground="{DynamicResource Brush.Danger}"
+                                   Text="{Binding SerialConnection.ErrorMessage}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
                 </Grid>
             </Border>
         </Expander>
 
-        <TabControl Grid.Row="2">
+        <TabControl x:Name="MainTabs"
+                    Grid.Row="2">
             <TabItem Header="实时监控">
                 <views:MonitorView DataContext="{Binding}" />
             </TabItem>
             <TabItem Header="参数设置">
-                <views:ParametersView DataContext="{Binding Parameters}" />
-            </TabItem>
-            <TabItem Header="寄存器工具">
-                <views:RegisterToolView DataContext="{Binding RegisterTool}" />
+                <views:ParametersView x:Name="ParametersPage"
+                                      DataContext="{Binding Parameters}" />
             </TabItem>
             <TabItem Header="通信日志">
                 <views:CommunicationLogView DataContext="{Binding CommunicationLog}" />
             </TabItem>
-            <TabItem Header="系统信息">
-                <views:SystemInfoView DataContext="{Binding SystemInfo}" />
+            <TabItem Header="固件升级">
+                <views:FirmwareUpgradeView DataContext="{Binding FirmwareUpgrade}" />
+            </TabItem>
+            <TabItem Header="串口助手">
+                <views:SerialAssistantView DataContext="{Binding SerialAssistant}" />
             </TabItem>
         </TabControl>
     </Grid>

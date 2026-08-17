@@ -1,5 +1,7 @@
 ﻿using System.IO.Ports;
 using System.Text.Json.Serialization;
+using System.Net;
+using System.Net.Sockets;
 using CH32UpperComputer.Infrastructure.Serial;
 
 namespace CH32UpperComputer.Infrastructure.Settings
@@ -93,6 +95,18 @@ namespace CH32UpperComputer.Infrastructure.Settings
         public string LogExportDirectory { get; set; } = string.Empty;
 
         /// <summary>
+        /// 获取或设置最近使用的 Ethernet IAP 目标 IPv4 地址。
+        /// </summary>
+        [JsonPropertyName("iap_target_address")]
+        public string IapTargetAddress { get; set; } = "192.168.1.10";
+
+        /// <summary>
+        /// 获取或设置最近使用的 Ethernet IAP TCP 端口。
+        /// </summary>
+        [JsonPropertyName("iap_tcp_port")]
+        public int IapTcpPort { get; set; } = 5000;
+
+        /// <summary>
         /// 获取或设置连接后自动发送标记；保存和加载时必须强制归零，连接始终等待手动指令。
         /// </summary>
         [JsonPropertyName("automatic_send_on_connect")]
@@ -103,6 +117,12 @@ namespace CH32UpperComputer.Infrastructure.Settings
         /// </summary>
         [JsonPropertyName("periodic_send_enabled")]
         public bool PeriodicSendEnabled { get; set; }
+
+        /// <summary>
+        /// 获取或设置可选的普通串口助手嵌套偏好；schema 1 旧文件缺失时使用安全默认值。
+        /// </summary>
+        [JsonPropertyName("serial_assistant")]
+        public SerialAssistantPreferences SerialAssistant { get; set; } = new();
 
         /// <summary>
         /// 创建采用 9600-8-N-1、地址一和默认超时的全新设置。
@@ -141,6 +161,7 @@ namespace CH32UpperComputer.Infrastructure.Settings
             string normalizedLastCommand = LastCommand?.Trim() ?? string.Empty;
             string normalizedExportDirectory = LogExportDirectory?.Trim() ?? string.Empty;
             string normalizedPortName = PortName?.Trim() ?? string.Empty;
+            string normalizedIapAddress = IapTargetAddress?.Trim() ?? string.Empty;
 
             if (normalizedPortName.Length > 64)
             {
@@ -157,6 +178,19 @@ namespace CH32UpperComputer.Infrastructure.Settings
                 throw new InvalidDataException("日志导出目录不能超过 1024 个字符。");
             }
 
+            if (!IPAddress.TryParse(normalizedIapAddress, out IPAddress? iapAddress) ||
+                iapAddress.AddressFamily != AddressFamily.InterNetwork ||
+                iapAddress.Equals(IPAddress.Any) ||
+                iapAddress.Equals(IPAddress.Broadcast))
+            {
+                throw new InvalidDataException("IAP 目标地址必须是明确的 IPv4 地址。");
+            }
+
+            if (IapTcpPort is < 1 or > 65535)
+            {
+                throw new InvalidDataException("IAP TCP 端口必须位于 1 至 65535。");
+            }
+
             SerialSettings serialSettings = new(
                 normalizedPortName,
                 BaudRate,
@@ -165,6 +199,8 @@ namespace CH32UpperComputer.Infrastructure.Settings
                 StopBits,
                 TimeSpan.FromMilliseconds(ResponseTimeoutMilliseconds),
                 TimeSpan.FromMilliseconds(RawInterByteTimeoutMilliseconds));
+            SerialAssistantPreferences assistantPreferences =
+                (SerialAssistant ?? new SerialAssistantPreferences()).CreateValidatedCopy();
 
             return new AppSettings
             {
@@ -181,8 +217,11 @@ namespace CH32UpperComputer.Infrastructure.Settings
                 AutoAppendCrc = AutoAppendCrc,
                 LastCommand = normalizedLastCommand,
                 LogExportDirectory = normalizedExportDirectory,
+                IapTargetAddress = iapAddress.ToString(),
+                IapTcpPort = IapTcpPort,
                 AutomaticSendOnConnect = false,
                 PeriodicSendEnabled = false,
+                SerialAssistant = assistantPreferences,
             };
         }
     }

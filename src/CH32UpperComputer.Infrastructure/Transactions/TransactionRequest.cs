@@ -33,7 +33,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// <param name="mode">标准匹配或原始调试模式。</param>
         /// <param name="standardRequest">标准模式使用的结构化请求；原始模式为空。</param>
         /// <param name="frame">将被完整写入串口的非空线路帧。</param>
-        /// <param name="responseTimeout">发送完成后等待响应的总超时。</param>
+        /// <param name="responseTimeout">首个物理写动作开始后等待响应的总超时。</param>
         /// <param name="rawInterByteTimeout">原始调试模式用于结束未知结构捕获的字节间静默超时。</param>
         private TransactionRequest(
             TransactionMode mode,
@@ -101,7 +101,7 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         public ReadOnlyMemory<byte> Frame => (byte[])frame.Clone();
 
         /// <summary>
-        /// 获取从发送完成时刻开始计算的响应总超时。
+        /// 获取从首个物理写动作开始时刻计算的响应总超时。
         /// </summary>
         public TimeSpan ResponseTimeout { get; }
 

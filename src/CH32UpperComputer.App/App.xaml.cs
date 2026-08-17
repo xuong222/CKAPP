@@ -1,6 +1,8 @@
 ﻿using CH32UpperComputer.App.Services;
 using CH32UpperComputer.App.ViewModels;
 using CH32UpperComputer.Core.Registers;
+using CH32UpperComputer.Infrastructure.Coordination;
+using CH32UpperComputer.Infrastructure.Iap;
 using CH32UpperComputer.Infrastructure.Logging;
 using CH32UpperComputer.Infrastructure.Serial;
 using CH32UpperComputer.Infrastructure.Settings;
@@ -32,6 +34,11 @@ namespace CH32UpperComputer.App
         private SerialPortTransport? transport;
 
         /// <summary>
+        /// 独占第二套串口传输、接收缓存和定时发送循环的助手会话服务。
+        /// </summary>
+        private SerialAssistantSessionService? serialAssistantSessionService;
+
+        /// <summary>
         /// 无队列 Modbus 事务协调器。
         /// </summary>
         private ModbusTransactionCoordinator? coordinator;
@@ -50,6 +57,11 @@ namespace CH32UpperComputer.App
         /// 跟踪事务终态之后仍需完成的日志、快照、统计和观察者发布工作。
         /// </summary>
         private ModbusOperationService? operationService;
+
+        /// <summary>
+        /// Ethernet IAP 完整升级状态机。
+        /// </summary>
+        private IapUpgradeCoordinator? iapUpgradeCoordinator;
 
         /// <summary>
         /// 主窗口聚合 ViewModel。
@@ -77,9 +89,28 @@ namespace CH32UpperComputer.App
                     "settings.json");
                 settingsStore = new JsonSettingsStore(settingsPath, timeProvider);
                 AppSettings settings = await settingsStore.LoadAsync(CancellationToken.None).ConfigureAwait(true);
-                transport = new SerialPortTransport(timeProvider);
-                coordinator = new ModbusTransactionCoordinator(transport, timeProvider);
-                periodicSendService = new PeriodicSendService(coordinator, timeProvider);
+                WindowsSerialPortDiscovery serialPortDiscovery = new();
+                SerialPortUsageRegistry portUsageRegistry = new();
+                transport = new SerialPortTransport(
+                    timeProvider,
+                    portUsageRegistry,
+                    "Modbus 串口");
+                SerialPortTransport assistantTransport = new(
+                    timeProvider,
+                    portUsageRegistry,
+                    "串口助手");
+                serialAssistantSessionService = new SerialAssistantSessionService(
+                    assistantTransport,
+                    timeProvider);
+                ApplicationOperationGate applicationOperationGate = new();
+                coordinator = new ModbusTransactionCoordinator(
+                    transport,
+                    timeProvider,
+                    applicationOperationGate);
+                periodicSendService = new PeriodicSendService(
+                    coordinator,
+                    timeProvider,
+                    applicationOperationGate);
                 communicationLogService = new CommunicationLogService(timeProvider);
                 DeviceSnapshot snapshot = new();
                 WpfUiDispatcher dispatcher = new(Dispatcher);
@@ -93,8 +124,13 @@ namespace CH32UpperComputer.App
                 SerialConnectionViewModel serialConnection = new(
                     transport,
                     coordinator,
+                    serialPortDiscovery,
                     dispatcher,
-                    settings);
+                    settings,
+                    applicationOperationGate);
+                await serialConnection
+                    .RefreshPortsAsync(CancellationToken.None)
+                    .ConfigureAwait(true);
                 SerialSettings initialSerialSettings = serialConnection.CreateSerialSettings();
                 SpecialConfigurationService specialConfigurationService = new(
                     coordinator,
@@ -102,41 +138,64 @@ namespace CH32UpperComputer.App
                     transport,
                     checked((byte)serialConnection.SlaveAddress),
                     initialSerialSettings);
+                specialConfigurationService.TransactionRecorded +=
+                    createdOperationService.RecordExternalResult;
                 CommandConsoleViewModel commandConsole = new(
                     createdOperationService,
                     periodicSendService,
                     serialConnection,
                     dispatcher,
-                    settings);
+                    settings,
+                    applicationOperationGate);
                 MonitorViewModel monitor = new(createdOperationService, dispatcher);
                 ParametersViewModel parameters = new(
                     commandConsole,
                     serialConnection,
                     specialConfigurationService,
                     createdOperationService,
-                    dispatcher);
-                RegisterToolViewModel registerTool = new(
-                    commandConsole,
-                    serialConnection,
-                    specialConfigurationService,
-                    createdOperationService,
-                    dispatcher);
+                    dispatcher,
+                    applicationOperationGate);
                 CommunicationLogViewModel communicationLog = new(
                     communicationLogService,
                     dispatcher,
                     timeProvider,
                     settings.LogExportDirectory);
-                SystemInfoViewModel systemInfo = new(
-                    settingsStore,
-                    communicationLog.ExportDirectory);
+                SerialAssistantViewModel serialAssistant = new(
+                    serialAssistantSessionService,
+                    serialPortDiscovery,
+                    dispatcher,
+                    settings.SerialAssistant);
+                await serialAssistant
+                    .RefreshPortsAsync(CancellationToken.None)
+                    .ConfigureAwait(true);
+                IapCommunicationLogService iapLogService = new(timeProvider);
+                TcpIapTransport iapTransport = new(timeProvider);
+                IapProtocolClient iapProtocolClient = new(
+                    iapTransport,
+                    iapLogService,
+                    timeProvider);
+                iapUpgradeCoordinator = new IapUpgradeCoordinator(
+                    iapProtocolClient,
+                    iapLogService,
+                    applicationOperationGate,
+                    timeProvider);
+                FirmwareUpgradeViewModel firmwareUpgrade = new(
+                    new FirmwareFileService(),
+                    iapUpgradeCoordinator,
+                    iapLogService,
+                    periodicSendService,
+                    applicationOperationGate,
+                    dispatcher,
+                    timeProvider,
+                    settings);
                 mainWindowViewModel = new MainWindowViewModel(
                     serialConnection,
                     commandConsole,
                     monitor,
                     parameters,
-                    registerTool,
+                    firmwareUpgrade,
                     communicationLog,
-                    systemInfo,
+                    serialAssistant,
                     createdOperationService,
                     dispatcher);
                 MainWindow window = new(mainWindowViewModel);
@@ -177,7 +236,13 @@ namespace CH32UpperComputer.App
                         viewModel.CommandConsole.AutoAppendCrc,
                         viewModel.CommandConsole.InputText,
                         viewModel.CommunicationLog.ExportDirectory);
-                    await settingsStore.SaveAsync(settings, CancellationToken.None).ConfigureAwait(true);
+                    settings.IapTargetAddress =
+                        viewModel.FirmwareUpgrade.TargetAddress;
+                    settings.IapTcpPort =
+                        viewModel.FirmwareUpgrade.TargetPort;
+                    settings.SerialAssistant =
+                        viewModel.SerialAssistant.CreatePreferences();
+                    await settingsStore.SaveAsync(settings, CancellationToken.None).ConfigureAwait(false);
                 }
             }
             catch (Exception)
@@ -185,38 +250,80 @@ namespace CH32UpperComputer.App
                 // 设置保存失败不应阻止串口和后台任务安全退出。
             }
 
+            if (serialAssistantSessionService is not null)
+            {
+                try
+                {
+                    await serialAssistantSessionService
+                        .StopPeriodicSendingAsync()
+                        .ConfigureAwait(false);
+                    await serialAssistantSessionService
+                        .DisconnectAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // 助手驱动故障不阻止后续 Modbus、IAP 和全部资源释放阶段继续执行。
+                }
+
+                try
+                {
+                    await serialAssistantSessionService
+                        .DisposeAsync()
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // 永久释放已经尽力关闭第二传输；退出流程继续收敛其他独立服务。
+                }
+            }
+
             if (periodicSendService is not null)
             {
-                await periodicSendService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+                await periodicSendService.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            if (iapUpgradeCoordinator is not null)
+            {
+                await iapUpgradeCoordinator
+                    .CancelAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
             }
 
             if (coordinator is not null)
             {
-                await coordinator.StopAsync(CancellationToken.None).ConfigureAwait(true);
-                await coordinator.WaitForBackgroundOperationsAsync(CancellationToken.None).ConfigureAwait(true);
+                await coordinator.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                await coordinator.WaitForBackgroundOperationsAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
             if (operationService is not null)
             {
-                await operationService.WaitForOperationsAsync(CancellationToken.None).ConfigureAwait(true);
+                await operationService.WaitForOperationsAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
             communicationLogService?.FlushPendingPublication();
+            viewModel?.FirmwareUpgrade.FlushPendingLogs();
             viewModel?.Dispose();
+            operationService?.Dispose();
 
             if (periodicSendService is not null)
             {
-                await periodicSendService.DisposeAsync().ConfigureAwait(true);
+                await periodicSendService.DisposeAsync().ConfigureAwait(false);
             }
 
             if (coordinator is not null)
             {
-                await coordinator.DisposeAsync().ConfigureAwait(true);
+                await coordinator.DisposeAsync().ConfigureAwait(false);
             }
 
             if (transport is not null)
             {
-                await transport.DisposeAsync().ConfigureAwait(true);
+                await transport.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (iapUpgradeCoordinator is not null)
+            {
+                await iapUpgradeCoordinator.DisposeAsync().ConfigureAwait(false);
             }
 
             communicationLogService?.Dispose();

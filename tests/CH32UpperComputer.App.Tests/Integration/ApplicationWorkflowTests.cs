@@ -75,7 +75,11 @@ namespace CH32UpperComputer.App.Tests.Integration
                 Assert.That(successfulLogs.Count(entry =>
                     entry.Direction == CommunicationDirection.Receive), Is.EqualTo(1));
                 Assert.That(successfulLogs.Select(entry => entry.TransactionId).Distinct(), Is.EqualTo(new long?[] { 1 }));
-                Assert.That(allLogs.Count(entry => entry.TransactionId == 2), Is.EqualTo(2));
+                Assert.That(allLogs.Count(entry => entry.TransactionId == 2), Is.EqualTo(3));
+                Assert.That(allLogs.Any(entry =>
+                    entry.TransactionId == 2 &&
+                    entry.Direction == CommunicationDirection.LateOrUnsolicited &&
+                    !entry.RawData.IsEmpty), Is.True);
                 Assert.That(allLogs.Any(entry =>
                     entry.TransactionId == 2 &&
                     entry.Direction == CommunicationDirection.Error &&
@@ -83,6 +87,37 @@ namespace CH32UpperComputer.App.Tests.Integration
                 Assert.That(allLogs.Any(entry =>
                     entry.TransactionId == 2 &&
                     entry.Direction == CommunicationDirection.Receive), Is.False);
+            }));
+        }
+
+        /// <summary>
+        /// 验证空闲期收到的无归属线路帧会带原始字节进入通信日志和实时数据收发框。
+        /// </summary>
+        [Test]
+        public async Task UnsolicitedFrame_IsVisibleInCommunicationLogAndLiveDataView()
+        {
+            await using AppViewModelHarness harness = AppViewModelHarness.Create();
+            await harness.ConnectAsync();
+            byte[] unsolicitedFrame = ModbusCrc16.Append(
+                [0x01, 0x03, 0x02, 0x00, 0x2A]);
+
+            await harness.Transport.InjectReceiveAsync(unsolicitedFrame);
+            await harness.WaitForReceiveSequenceAsync(1);
+            harness.CommunicationLog.FlushPendingEntries();
+            IReadOnlyList<CommunicationLogEntry> dataSnapshot =
+                harness.LogService.CreateDataSnapshot();
+
+            Assert.Multiple((Action)(() =>
+            {
+                Assert.That(dataSnapshot, Has.Count.EqualTo(1));
+                Assert.That(
+                    dataSnapshot[0].Direction,
+                    Is.EqualTo(CommunicationDirection.LateOrUnsolicited));
+                Assert.That(dataSnapshot[0].RawData.ToArray(), Is.EqualTo(unsolicitedFrame));
+                Assert.That(harness.CommunicationLog.Entries, Has.Count.EqualTo(1));
+                Assert.That(
+                    harness.CommunicationLog.Entries[0].Direction,
+                    Is.EqualTo(CommunicationDirection.LateOrUnsolicited));
             }));
         }
 

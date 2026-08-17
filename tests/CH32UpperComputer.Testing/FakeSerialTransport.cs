@@ -64,7 +64,7 @@ namespace CH32UpperComputer.Testing
         /// <summary>
         /// 当前打开会话使用的完整串口设置；未打开时为空。
         /// </summary>
-        private SerialSettings? currentSettings;
+        private SerialLineSettings? currentLineSettings;
 
         /// <summary>
         /// 公开端口代次；打开成功与活动会话关闭、断开或释放时均递增。
@@ -92,9 +92,19 @@ namespace CH32UpperComputer.Testing
         private FakeWritePause? nextWritePause;
 
         /// <summary>
+        /// 下一次写入已经记录完整线路帧后、返回调用方前需要等待的可控暂停门。
+        /// </summary>
+        private FakeWritePause? nextWriteCompletionPause;
+
+        /// <summary>
         /// 指示传输对象是否已经永久释放。
         /// </summary>
         private bool isDisposed;
+
+        /// <summary>
+        /// 在模拟清理状态发布时保存观察者。
+        /// </summary>
+        public event Action<bool>? CleanupPendingChanged;
 
         /// <summary>
         /// 初始化使用系统时间和默认有界容量的模拟传输。
@@ -155,6 +165,11 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
+        /// 获取模拟传输是否仍有后台物理清理；内存实现始终同步完成。
+        /// </summary>
+        public bool IsCleanupPending => false;
+
+        /// <summary>
         /// 获取公开端口代次；打开成功与活动会话失效都会令该值递增。
         /// </summary>
         public int PortGeneration
@@ -194,7 +209,21 @@ namespace CH32UpperComputer.Testing
             {
                 lock (syncRoot)
                 {
-                    return currentSettings;
+                    return currentLineSettings as SerialSettings;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取当前打开会话使用的通用线路设置；未打开时为空。
+        /// </summary>
+        public SerialLineSettings? CurrentLineSettings
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return currentLineSettings;
                 }
             }
         }
@@ -249,7 +278,7 @@ namespace CH32UpperComputer.Testing
         /// <returns>同步完成的值任务。</returns>
         /// <exception cref="InvalidOperationException">对象已释放或已有打开会话时抛出。</exception>
         public ValueTask OpenAsync(
-            SerialSettings settings,
+            SerialLineSettings settings,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(settings);
@@ -266,8 +295,12 @@ namespace CH32UpperComputer.Testing
 
                 int newGeneration = checked(portGeneration + 1);
                 currentSession = new Session(newGeneration, receiveCapacity);
-                currentSettings = settings;
-                openHistory.Add(settings);
+                currentLineSettings = settings;
+
+                if (settings is SerialSettings serialSettings)
+                {
+                    openHistory.Add(serialSettings);
+                }
                 portGeneration = newGeneration;
             }
 
@@ -278,12 +311,15 @@ namespace CH32UpperComputer.Testing
         /// 保存完整发送帧的独占副本，或执行预先脚本化的一次性写异常。
         /// </summary>
         /// <param name="frame">待记录的非空发送帧。</param>
+        /// <param name="tryBeginWrite">完成预写暂停后、记录线路帧前调用的同步授权入口。</param>
         /// <param name="cancellationToken">在状态变更前取消写入操作的令牌。</param>
-        /// <returns>无暂停时同步完成；配置暂停时在测试释放门后异步完成的值任务。</returns>
+        /// <returns>无暂停时同步完成；配置暂停时在测试释放门后异步完成；授权失败时不记录帧。</returns>
         /// <exception cref="ArgumentException"><paramref name="frame"/> 为空时抛出。</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="tryBeginWrite"/> 为空时抛出。</exception>
         /// <exception cref="InvalidOperationException">当前没有打开会话时抛出。</exception>
         public async ValueTask WriteAsync(
             ReadOnlyMemory<byte> frame,
+            Func<bool> tryBeginWrite,
             CancellationToken cancellationToken)
         {
             if (frame.IsEmpty)
@@ -291,10 +327,13 @@ namespace CH32UpperComputer.Testing
                 throw new ArgumentException("发送帧不能为空。", nameof(frame));
             }
 
+            ArgumentNullException.ThrowIfNull(tryBeginWrite);
+
             cancellationToken.ThrowIfCancellationRequested();
             byte[] frameCopy = frame.ToArray();
             Session session;
             FakeWritePause? writePause;
+            FakeWritePause? writeCompletionPause;
 
             lock (syncRoot)
             {
@@ -310,12 +349,19 @@ namespace CH32UpperComputer.Testing
 
                 writePause = nextWritePause;
                 nextWritePause = null;
+                writeCompletionPause = nextWriteCompletionPause;
+                nextWriteCompletionPause = null;
             }
 
             if (writePause is not null)
             {
                 writePause.SignalEntered();
                 await writePause.WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!tryBeginWrite())
+            {
+                return;
             }
 
             lock (syncRoot)
@@ -333,6 +379,14 @@ namespace CH32UpperComputer.Testing
                 }
 
                 writtenFrames.Add(frameCopy);
+            }
+
+            if (writeCompletionPause is not null)
+            {
+                writeCompletionPause.SignalEntered();
+                await writeCompletionPause
+                    .WaitForReleaseAsync(cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -373,13 +427,14 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
-                    currentSettings = null;
+                    currentLineSettings = null;
                     closeOperationCount = checked(closeOperationCount + 1);
                     portGeneration = checked(portGeneration + 1);
                 }
             }
 
             session?.ReceiveChannel.Writer.TryComplete();
+            CleanupPendingChanged?.Invoke(false);
             return ValueTask.CompletedTask;
         }
 
@@ -523,6 +578,28 @@ namespace CH32UpperComputer.Testing
         }
 
         /// <summary>
+        /// 让下一次完整线路帧已经交给模拟设备后、写调用返回协调器前暂停。
+        /// </summary>
+        /// <returns>可等待写入完成边界并由测试显式释放的单次暂停门。</returns>
+        /// <exception cref="InvalidOperationException">当前没有打开会话，或已经存在尚未被下一次写入领取的完成暂停门时抛出。</exception>
+        public FakeWritePause PauseNextWriteCompletion()
+        {
+            lock (syncRoot)
+            {
+                ThrowIfDisposedUnderLock();
+                EnsureOpenUnderLock();
+
+                if (nextWriteCompletionPause is not null)
+                {
+                    throw new InvalidOperationException("下一次写入已经配置完成暂停门。");
+                }
+
+                nextWriteCompletionPause = new FakeWritePause();
+                return nextWriteCompletionPause;
+            }
+        }
+
+        /// <summary>
         /// 模拟远端断开，可选择使读取正常结束或以 I/O 异常结束。
         /// </summary>
         /// <param name="exception">需要传播给读取方的故障；为 <see langword="null"/> 时正常结束序列。</param>
@@ -538,7 +615,7 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
-                    currentSettings = null;
+                    currentLineSettings = null;
                     portGeneration = checked(portGeneration + 1);
                 }
             }
@@ -568,12 +645,13 @@ namespace CH32UpperComputer.Testing
                 if (session is not null)
                 {
                     currentSession = null;
-                    currentSettings = null;
+                    currentLineSettings = null;
                     portGeneration = checked(portGeneration + 1);
                 }
             }
 
             session?.ReceiveChannel.Writer.TryComplete();
+            CleanupPendingChanged?.Invoke(false);
             return ValueTask.CompletedTask;
         }
 

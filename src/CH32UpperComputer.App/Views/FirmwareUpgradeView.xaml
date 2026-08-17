@@ -1,0 +1,360 @@
+<UserControl x:Class="CH32UpperComputer.App.Views.FirmwareUpgradeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DesignWidth="1420"
+             d:DesignHeight="720">
+    <Grid Margin="0,12,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.2*" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Style="{StaticResource Card}"
+                    Padding="16">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}"
+                               Text="固件与目标设备" />
+                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="92" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox IsReadOnly="True"
+                                 Text="{Binding FirmwarePath}"
+                                 ToolTip="{Binding FirmwarePath}" />
+                        <Button Grid.Column="1"
+                                Margin="10,0,0,0"
+                                IsEnabled="{Binding CanSelectFirmware}"
+                                Click="HandleBrowseFirmware"
+                                Content="浏览 .bin" />
+                    </Grid>
+                    <Grid Grid.Row="2" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.5*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="文件名" />
+                            <TextBlock Margin="0,4,0,0"
+                                       FontWeight="SemiBold"
+                                       Text="{Binding FirmwareFileName}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="固件大小" />
+                            <TextBlock Margin="0,4,0,0"
+                                       FontWeight="SemiBold"
+                                       Text="{Binding FirmwareSizeText}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="16,0,0,0">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="整体 CRC32" />
+                            <TextBlock Margin="0,4,0,0"
+                                       FontFamily="Cascadia Mono"
+                                       Foreground="{DynamicResource Brush.Normal}"
+                                       Text="{Binding FirmwareCrc32Text}" />
+                        </StackPanel>
+                    </Grid>
+                    <Border Grid.Row="3"
+                            Margin="0,12,0,0"
+                            Padding="10"
+                            CornerRadius="5"
+                            BorderBrush="{DynamicResource Brush.Warning}"
+                            BorderThickness="1"
+                            Background="#261D1410">
+                        <StackPanel>
+                            <TextBlock Foreground="{DynamicResource Brush.Warning}"
+                                       Text="裸 .bin 不包含链接地址，软件无法证明其按 0x0800C000 链接生成。"
+                                       TextWrapping="Wrap" />
+                            <CheckBox Margin="0,8,0,0"
+                                      IsEnabled="{Binding CanEditUpgradeInputs}"
+                                      IsChecked="{Binding IsLinkAddressConfirmed, Mode=TwoWay}"
+                                      Content="我确认该固件来自按 0x0800C000 链接的 CH32V317 App 工程" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2"
+                    Style="{StaticResource Card}"
+                    Padding="16">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Style="{StaticResource Text.SectionTitle}"
+                               Text="网络与 Bootloader 信息" />
+                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="120" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,10,0">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="目标 IPv4" />
+                            <TextBox IsEnabled="{Binding CanEditUpgradeInputs}"
+                                     Text="{Binding TargetAddress, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="TCP 端口" />
+                            <TextBox IsEnabled="{Binding CanEditUpgradeInputs}"
+                                     Text="{Binding TargetPort, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+                    <UniformGrid Grid.Row="2"
+                                 Margin="0,12,0,0"
+                                 Columns="3">
+                        <StackPanel Margin="0,0,10,8">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="Boot 版本" />
+                            <TextBlock FontFamily="Cascadia Mono" Text="{Binding BootVersionText}" />
+                        </StackPanel>
+                        <StackPanel Margin="0,0,10,8">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="App 基址" />
+                            <TextBlock FontFamily="Cascadia Mono" Text="{Binding AppBaseText}" />
+                        </StackPanel>
+                        <StackPanel Margin="0,0,0,8">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="App 最大长度" />
+                            <TextBlock Text="{Binding AppMaxSizeText}" />
+                        </StackPanel>
+                        <StackPanel Margin="0,0,10,0">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="当前 App" />
+                            <TextBlock Text="{Binding AppValidText}" />
+                        </StackPanel>
+                        <StackPanel Margin="0,0,10,0">
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="当前大小" />
+                            <TextBlock Text="{Binding AppSizeText}" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Muted}" Text="当前 CRC32" />
+                            <TextBlock FontFamily="Cascadia Mono" Text="{Binding AppCrc32Text}" />
+                        </StackPanel>
+                    </UniformGrid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="1"
+                Margin="0,12,0,12"
+                Style="{StaticResource Card}"
+                Padding="16,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="135" />
+                        <ColumnDefinition Width="145" />
+                        <ColumnDefinition Width="155" />
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="TCP 连接" />
+                        <TextBlock Margin="0,3,0,0"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Brush.Normal}"
+                                   Text="{Binding ConnectionStatusText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="升级状态" />
+                        <TextBlock Margin="0,3,0,0"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Brush.PrimaryBright}"
+                                   Text="{Binding UpgradeStateText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="App 运行结果" />
+                        <TextBlock Margin="0,3,0,0"
+                                   FontWeight="SemiBold"
+                                   Text="{Binding RunStateText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="3">
+                        <TextBlock Style="{StaticResource Text.Muted}" Text="尝试计数" />
+                        <TextBlock Margin="0,3,0,0" Text="{Binding AttemptText}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="4"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.TextSecondary}"
+                               Text="{Binding StatusMessage}"
+                               TextWrapping="Wrap" />
+                </Grid>
+
+                <StackPanel Grid.Column="1"
+                            Grid.RowSpan="3"
+                            Margin="18,0,0,0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Margin="0,0,8,0"
+                            Style="{StaticResource Button.Primary}"
+                            Command="{Binding StartUpgradeCommand}"
+                            Content="开始升级" />
+                    <Button Margin="0,0,8,0"
+                            Command="{Binding CancelUpgradeCommand}"
+                            Content="取消" />
+                    <Button Style="{StaticResource Button.Primary}"
+                            Command="{Binding RunApplicationCommand}"
+                            Content="运行 App" />
+                </StackPanel>
+
+                <ProgressBar Grid.Row="1"
+                             Margin="0,12,0,0"
+                             Height="13"
+                             Minimum="0"
+                             Maximum="100"
+                             Foreground="{DynamicResource Brush.Normal}"
+                             Background="{DynamicResource Brush.Window}"
+                             Value="{Binding ProgressPercent}" />
+
+                <Grid Grid.Row="2" Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="220" />
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Style="{StaticResource Text.Caption}"
+                               Text="{Binding ConfirmedBytesText}" />
+                    <TextBlock Grid.Column="1"
+                               Style="{StaticResource Text.Caption}"
+                               Text="{Binding SpeedText, StringFormat=速度 {0}}" />
+                    <TextBlock Grid.Column="2"
+                               Style="{StaticResource Text.Caption}"
+                               Text="{Binding ElapsedText, StringFormat=耗时 {0}}" />
+                    <TextBlock Grid.Column="3"
+                               Style="{StaticResource Text.Caption}"
+                               Text="{Binding RemainingText, StringFormat=预计剩余 {0}}" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Style="{StaticResource Card}"
+                Padding="0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Margin="14,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <TextBlock Style="{StaticResource Text.SectionTitle}"
+                                   Text="IAP 通信日志" />
+                        <TextBlock Margin="12,3,0,0"
+                                   Style="{StaticResource Text.Muted}"
+                                   Text="独立缓存 5000 条 · 实时显示 750 条" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <CheckBox Margin="0,0,12,0"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding ShowFullDataPayload}"
+                                  Content="显示完整 DATA 载荷" />
+                        <TextBox Width="230"
+                                 Margin="0,0,8,0"
+                                 Text="{Binding ExportDirectory, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="日志导出目录" />
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding ClearLogCommand}"
+                                Content="清空" />
+                        <Button Command="{Binding ExportLogCommand}" Content="导出 CSV" />
+                    </StackPanel>
+                </Grid>
+                <ListView Grid.Row="1"
+                          Margin="1,0,1,1"
+                          Background="{DynamicResource Brush.Window}"
+                          BorderBrush="{DynamicResource Brush.Border}"
+                          Foreground="{DynamicResource Brush.TextPrimary}"
+                          ItemsSource="{Binding Entries}"
+                          ScrollViewer.CanContentScroll="True"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Foreground"
+                                    Value="{DynamicResource Brush.TextPrimary}" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="0" />
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background"
+                                            Value="{DynamicResource Brush.SurfaceHover}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background"
+                                            Value="{DynamicResource Brush.BorderStrong}" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="12,8"
+                                    BorderBrush="{DynamicResource Brush.Border}"
+                                    BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="92" />
+                                        <ColumnDefinition Width="46" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock FontFamily="Cascadia Mono"
+                                               Foreground="{DynamicResource Brush.TextMuted}"
+                                               Text="{Binding TimeText}" />
+                                    <TextBlock Grid.Column="1"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Brush.PrimaryBright}"
+                                               Text="{Binding DirectionText}" />
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Foreground="{DynamicResource Brush.TextSecondary}"
+                                                   Text="{Binding SummaryText}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="0,4,0,0"
+                                                   FontFamily="Cascadia Mono"
+                                                   Foreground="{DynamicResource Brush.TextPrimary}"
+                                                   Text="{Binding RawText}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

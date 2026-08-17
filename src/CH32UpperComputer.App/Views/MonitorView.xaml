@@ -8,11 +8,12 @@
              d:DesignWidth="1380">
     <Grid Margin="0,10,0,0">
         <Grid.RowDefinitions>
-            <RowDefinition Height="3*" />
-            <RowDefinition Height="2*" />
+            <RowDefinition Height="3*" MinHeight="250" />
+            <RowDefinition Height="12" />
+            <RowDefinition Height="2*" MinHeight="220" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="0,0,0,10">
+        <Grid Grid.Row="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="320" />
@@ -146,45 +147,51 @@
                                        TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
-                    <ItemsControl Grid.Row="2" ItemsSource="{Binding Monitor.AlarmItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Margin="0,0,0,5"
-                                        Padding="9,6"
-                                        Background="{DynamicResource Brush.SurfaceRaised}"
-                                        BorderBrush="{DynamicResource Brush.Border}"
-                                        BorderThickness="1"
-                                        CornerRadius="5">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <Ellipse Width="7" Height="7">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="{DynamicResource Brush.Normal}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                            <Setter Property="Fill" Value="{DynamicResource Brush.Danger}" />
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding IsEnabled}" Value="False">
-                                                            <Setter Property="Fill" Value="{DynamicResource Brush.TextMuted}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                        </Ellipse>
-                                        <TextBlock Grid.Column="1" Text="{Binding DisplayName}" />
-                                        <TextBlock Grid.Column="2"
-                                                   Foreground="{DynamicResource Brush.TextSecondary}"
-                                                   Text="{Binding StateText}" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <ScrollViewer Grid.Row="2"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Monitor.AlarmItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,5"
+                                            Padding="9,6"
+                                            Background="{DynamicResource Brush.SurfaceRaised}"
+                                            BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="5">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="12" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Ellipse Width="7" Height="7">
+                                                <Ellipse.Style>
+                                                    <Style TargetType="Ellipse">
+                                                        <Setter Property="Fill" Value="{DynamicResource Brush.Normal}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                <Setter Property="Fill" Value="{DynamicResource Brush.Danger}" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                                <Setter Property="Fill" Value="{DynamicResource Brush.TextMuted}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Ellipse.Style>
+                                            </Ellipse>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding DisplayName}"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock Grid.Column="2"
+                                                       Foreground="{DynamicResource Brush.TextSecondary}"
+                                                       Text="{Binding StateText}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                     <TextBlock Grid.Row="3"
                                Margin="0,8,0,0"
                                Style="{StaticResource Text.Muted}"
@@ -193,10 +200,16 @@
             </Border>
         </Grid>
 
-        <Grid Grid.Row="1">
+        <GridSplitter Grid.Row="1"
+                      Margin="0,2"
+                      HorizontalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      Style="{StaticResource Splitter.Industrial}" />
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="225" />
+                <ColumnDefinition Width="270" MinWidth="220" />
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0"
                     Margin="0,0,10,0"
@@ -234,8 +247,17 @@
                              BorderThickness="1"
                              ItemsSource="{Binding CommunicationLog.Entries}"
                              ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Visible"
+                             HorizontalContentAlignment="Stretch"
                              VirtualizingPanel.IsVirtualizing="True"
                              VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <VirtualizingStackPanel />
@@ -262,11 +284,11 @@
                                                    FontSize="11"
                                                    Foreground="{DynamicResource Brush.TextPrimary}"
                                                    Text="{Binding RawHex}"
-                                                   TextTrimming="CharacterEllipsis" />
+                                                   TextWrapping="Wrap" />
                                         <TextBlock FontSize="10"
                                                    Foreground="{DynamicResource Brush.TextMuted}"
                                                    Text="{Binding Summary}"
-                                                   TextTrimming="CharacterEllipsis" />
+                                                   TextWrapping="Wrap" />
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>
@@ -287,7 +309,11 @@
                             </Grid.ColumnDefinitions>
                             <TextBox Grid.Column="0"
                                      MinHeight="38"
+                                     MaxHeight="82"
                                      FontFamily="Consolas"
+                                     TextWrapping="Wrap"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                                      Text="{Binding CommandConsole.InputText, UpdateSourceTrigger=PropertyChanged}" />
                             <CheckBox Grid.Column="1"
                                       Margin="10,0"
@@ -333,36 +359,38 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <TextBlock Style="{StaticResource Text.SectionTitle}" Text="常用指令" />
-                    <ItemsControl Grid.Row="1"
+                    <ScrollViewer Grid.Row="1"
                                   Margin="0,10,0,0"
-                                  ItemsSource="{Binding CommandConsole.CommonCommands}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Margin="0,0,0,6"
-                                        Padding="9,6"
-                                        HorizontalContentAlignment="Left"
-                                        Command="{Binding SelectCommand}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding Title}" />
-                                        <TextBlock Grid.Column="1"
-                                                   Margin="8,1,0,0"
-                                                   FontSize="9"
-                                                   Foreground="{DynamicResource Brush.TextMuted}"
-                                                   Text="{Binding Description}" />
-                                    </Grid>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding CommandConsole.CommonCommands}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Margin="0,0,0,6"
+                                            Padding="9,7"
+                                            HorizontalContentAlignment="Stretch"
+                                            Command="{Binding SelectCommand}">
+                                        <StackPanel>
+                                            <TextBlock FontSize="12"
+                                                       FontWeight="SemiBold"
+                                                       Text="{Binding Title}"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock Margin="0,3,0,0"
+                                                       FontSize="10"
+                                                       Foreground="{DynamicResource Brush.TextMuted}"
+                                                       Text="{Binding Description}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>

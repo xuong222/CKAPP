@@ -57,6 +57,12 @@
         private readonly TimeProvider timeProvider;
 
         /// <summary>
+        /// 阻止在 IAP 独占期间绕过界面启动新定时计划。
+        /// </summary>
+        private readonly global::CH32UpperComputer.Infrastructure.Coordination.IApplicationOperationGate?
+            applicationOperationGate;
+
+        /// <summary>
         /// 最近配置的不可变事务请求；尚未配置时为空。
         /// </summary>
         private TransactionRequest? configuredRequest;
@@ -101,15 +107,19 @@
         /// </summary>
         /// <param name="coordinator">所有手动和定时请求共用的无队列事务协调器。</param>
         /// <param name="timeProvider">完整间隔使用的统一时间源。</param>
+        /// <param name="applicationOperationGate">可选的应用级 IAP/Modbus 互斥门。</param>
         /// <exception cref="ArgumentNullException">任一依赖为空时抛出。</exception>
         public PeriodicSendService(
             ModbusTransactionCoordinator coordinator,
-            TimeProvider timeProvider)
+            TimeProvider timeProvider,
+            global::CH32UpperComputer.Infrastructure.Coordination.IApplicationOperationGate?
+                applicationOperationGate = null)
         {
             ArgumentNullException.ThrowIfNull(coordinator);
             ArgumentNullException.ThrowIfNull(timeProvider);
             this.coordinator = coordinator;
             this.timeProvider = timeProvider;
+            this.applicationOperationGate = applicationOperationGate;
             coordinator.StateChanged += HandleCoordinatorStateChanged;
         }
 
@@ -264,6 +274,12 @@
             lock (stateSyncRoot)
             {
                 ThrowIfDisposedUnderLock();
+
+                if (applicationOperationGate?.IsIapActive == true)
+                {
+                    throw new InvalidOperationException(
+                        "固件升级期间不能启动 Modbus 定时发送。");
+                }
 
                 if (configuredRequest is null)
                 {

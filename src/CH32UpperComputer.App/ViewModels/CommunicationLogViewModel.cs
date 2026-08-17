@@ -166,10 +166,15 @@ namespace CH32UpperComputer.App.ViewModels
         /// </summary>
         public void RefreshFilteredEntries()
         {
+            if (!TryParseTransactionId(out long? transactionId))
+            {
+                return;
+            }
+
             IReadOnlyList<CommunicationLogEntry> filtered = logService.CreateFilteredSnapshot(
                 CreateSelectedDirections(),
                 string.IsNullOrWhiteSpace(Keyword) ? null : Keyword.Trim(),
-                ParseTransactionId());
+                transactionId);
             CommunicationLogEntry[] live = filtered
                 .TakeLast(CommunicationLogService.LiveViewCapacity)
                 .ToArray();
@@ -306,14 +311,16 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 解析可选正事务编号；空文本表示不过滤，非法文本显示明确错误。
+        /// 尝试解析可选正事务编号；空文本表示不过滤，非法文本显示明确错误。
         /// </summary>
-        /// <returns>空值或正事务编号。</returns>
-        private long? ParseTransactionId()
+        /// <param name="transactionId">成功时接收空值或正事务编号；失败时为空。</param>
+        /// <returns>输入为空或为正整数时返回真；格式或范围无效时返回假。</returns>
+        private bool TryParseTransactionId(out long? transactionId)
         {
             if (string.IsNullOrWhiteSpace(TransactionIdText))
             {
-                return null;
+                transactionId = null;
+                return true;
             }
 
             if (long.TryParse(
@@ -323,11 +330,13 @@ namespace CH32UpperComputer.App.ViewModels
                 out long value) &&
                 value > 0)
             {
-                return value;
+                transactionId = value;
+                return true;
             }
 
+            transactionId = null;
             StatusMessage = "事务编号筛选必须是正整数。";
-            return long.MinValue;
+            return false;
         }
 
         /// <summary>

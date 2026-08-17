@@ -99,6 +99,11 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         public bool IsOperationBusy => Volatile.Read(ref activeOperationFlag) != 0;
 
         /// <summary>
+        /// 在地址、波特率、恢复出厂或未知地址查询完成协调器提交后发布实际请求与唯一结果。
+        /// </summary>
+        public event Action<TransactionRequest, TransactionExecutionResult>? TransactionRecorded;
+
+        /// <summary>
         /// 获取软件当前保留的不可变本地连接配置。
         /// </summary>
         public DeviceConnectionConfiguration CurrentConfiguration
@@ -190,9 +195,12 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                     previous.SlaveAddress,
                     SlaveAddressRegister,
                     newSlaveAddress);
+                TransactionRequest transactionRequest =
+                    CreateStandardTransaction(request, previous.SerialSettings);
                 TransactionExecutionResult transactionResult = await coordinator.TryExecuteAsync(
-                    CreateStandardTransaction(request, previous.SerialSettings),
+                    transactionRequest,
                     cancellationToken).ConfigureAwait(false);
+                PublishTransactionRecorded(transactionRequest, transactionResult);
 
                 if (IsSucceeded(transactionResult))
                 {
@@ -262,9 +270,12 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                     previous.SlaveAddress,
                     BaudRateCodeRegister,
                     baudRateCode);
+                TransactionRequest transactionRequest =
+                    CreateStandardTransaction(request, previous.SerialSettings);
                 TransactionExecutionResult transactionResult = await coordinator.TryExecuteAsync(
-                    CreateStandardTransaction(request, previous.SerialSettings),
+                    transactionRequest,
                     cancellationToken).ConfigureAwait(false);
+                PublishTransactionRecorded(transactionRequest, transactionResult);
 
                 if (!IsSucceeded(transactionResult))
                 {
@@ -326,9 +337,12 @@ namespace CH32UpperComputer.Infrastructure.Transactions
                     previous.SlaveAddress,
                     FactoryResetRegister,
                     FactoryResetCommand);
+                TransactionRequest transactionRequest =
+                    CreateStandardTransaction(request, previous.SerialSettings);
                 TransactionExecutionResult transactionResult = await coordinator.TryExecuteAsync(
-                    CreateStandardTransaction(request, previous.SerialSettings),
+                    transactionRequest,
                     cancellationToken).ConfigureAwait(false);
+                PublishTransactionRecorded(transactionRequest, transactionResult);
 
                 if (!IsSucceeded(transactionResult))
                 {
@@ -377,9 +391,12 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             {
                 await periodicSendService.StopAsync(CancellationToken.None).ConfigureAwait(false);
                 ModbusRequest request = ModbusRequestFactory.CreateUnknownAddressQuery();
+                TransactionRequest transactionRequest =
+                    CreateStandardTransaction(request, previous.SerialSettings);
                 TransactionExecutionResult transactionResult = await coordinator.TryExecuteAsync(
-                    CreateStandardTransaction(request, previous.SerialSettings),
+                    transactionRequest,
                     cancellationToken).ConfigureAwait(false);
+                PublishTransactionRecorded(transactionRequest, transactionResult);
                 byte? discoveredAddress = GetStrictDiscoveredAddress(transactionResult);
 
                 if (!discoveredAddress.HasValue)
@@ -622,6 +639,38 @@ namespace CH32UpperComputer.Infrastructure.Transactions
             }
 
             return discoveredAddress;
+        }
+
+        /// <summary>
+        /// 逐个通知专用事务观察者，并隔离界面或日志观察者异常以保护配置流程终态。
+        /// </summary>
+        /// <param name="request">本次实际提交给共享协调器的不可变事务请求。</param>
+        /// <param name="result">协调器返回的 Busy 拒绝或唯一事务终态。</param>
+        private void PublishTransactionRecorded(
+            TransactionRequest request,
+            TransactionExecutionResult result)
+        {
+            Action<TransactionRequest, TransactionExecutionResult>? observers =
+                TransactionRecorded;
+
+            if (observers is null)
+            {
+                return;
+            }
+
+            foreach (Action<TransactionRequest, TransactionExecutionResult> observer in
+                observers.GetInvocationList()
+                    .Cast<Action<TransactionRequest, TransactionExecutionResult>>())
+            {
+                try
+                {
+                    observer(request, result);
+                }
+                catch (Exception)
+                {
+                    // 日志或界面观察者故障不得改变设备配置事务已经确定的结果。
+                }
+            }
         }
 
         /// <summary>

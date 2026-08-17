@@ -240,6 +240,11 @@ namespace CH32UpperComputer.Infrastructure.Transactions
         /// 应用正在退出，不再接受新事务。
         /// </summary>
         ApplicationStopping = 4,
+
+        /// <summary>
+        /// Ethernet IAP 正在独占应用通信操作。
+        /// </summary>
+        IapActive = 5,
     }
 
     /// <summary>

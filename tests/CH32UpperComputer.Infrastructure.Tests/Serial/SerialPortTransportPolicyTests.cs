@@ -27,13 +27,53 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             {
                 Assert.That(source, Does.Contain("serialPort.BaseStream"));
                 Assert.That(source, Does.Contain("SerialReadPump.RunAsync"));
-                Assert.That(source, Does.Contain("session.DisposePhysicalResources();"));
+                Assert.That(source, Does.Contain("session.StartPhysicalCleanup()"));
                 Assert.That(source, Does.Contain("session.DisposeCancellation();"));
+                Assert.That(source, Does.Contain("session.DisposePortLease();"));
+                Assert.That(source, Does.Contain("Task.Run(DisposePhysicalResourcesCore)"));
+                Assert.That(source, Does.Contain("ForegroundCloseTimeout"));
                 Assert.That(source, Does.Not.Contain(".DataReceived +="));
                 Assert.That(source, Does.Not.Contain("BytesToRead"));
-                Assert.That(source, Does.Not.Contain(".Read("));
-                Assert.That(source, Does.Not.Contain(".ReadByte("));
+                Assert.That(source, Does.Not.Contain("BaseStream.Read("));
+                Assert.That(source, Does.Not.Contain("serialPort.Read("));
+                Assert.That(source, Does.Not.Contain("BaseStream.ReadByte("));
+                Assert.That(source, Does.Not.Contain("serialPort.ReadByte("));
             }));
+        }
+
+        /// <summary>
+        /// 验证端口租约晚于物理清理完成、且早于向界面发布清理完成状态释放。
+        /// </summary>
+        [Test]
+        public void Source_ReleasesPortLeaseAfterPhysicalCleanupBeforeClearingPendingState()
+        {
+            string repositoryRoot = FindRepositoryRoot(TestContext.CurrentContext.TestDirectory);
+            string sourcePath = Path.Combine(
+                repositoryRoot,
+                "src",
+                "CH32UpperComputer.Infrastructure",
+                "Serial",
+                "SerialPortTransport.cs");
+            string source = File.ReadAllText(sourcePath);
+            int awaitedCleanup = source.IndexOf(
+                "await physicalCleanup.ConfigureAwait(false);",
+                StringComparison.Ordinal);
+            int leaseRelease = source.IndexOf(
+                "session.DisposePortLease();",
+                awaitedCleanup,
+                StringComparison.Ordinal);
+            int pendingCleared = source.IndexOf(
+                "SetCleanupPending(false);",
+                leaseRelease,
+                StringComparison.Ordinal);
+
+            Assert.Multiple(
+                (Action)(() =>
+                {
+                    Assert.That(awaitedCleanup, Is.GreaterThanOrEqualTo(0));
+                    Assert.That(leaseRelease, Is.GreaterThan(awaitedCleanup));
+                    Assert.That(pendingCleared, Is.GreaterThan(leaseRelease));
+                }));
         }
 
         /// <summary>

@@ -64,7 +64,9 @@ $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $solutionPath = Join-Path $repositoryRoot "CH32UpperComputer.sln"
 $projectPath = Join-Path $repositoryRoot "src\CH32UpperComputer.App\CH32UpperComputer.App.csproj"
 $publishDirectory = Join-Path $repositoryRoot "artifacts\publish\win-x64"
-$expectedExecutable = Join-Path $publishDirectory "CH32UpperComputer.App.exe"
+$expectedExecutable = Join-Path $publishDirectory "CKAPP.exe"
+$deliveryExecutable = Join-Path $repositoryRoot "CKAPP.exe"
+$legacyDeliveryExecutable = Join-Path $repositoryRoot "CH32UpperComputer.App.exe"
 
 if (-not (Test-Path -LiteralPath $solutionPath -PathType Leaf))
 {
@@ -77,6 +79,8 @@ if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf))
 }
 
 Assert-PathWithinRoot -RootPath $repositoryRoot -CandidatePath $publishDirectory
+Assert-PathWithinRoot -RootPath $repositoryRoot -CandidatePath $deliveryExecutable
+Assert-PathWithinRoot -RootPath $repositoryRoot -CandidatePath $legacyDeliveryExecutable
 
 Push-Location $repositoryRoot
 
@@ -149,10 +153,31 @@ try
         throw "发布目录包含单文件 EXE 以外的文件：$unexpectedNames"
     }
 
+    Copy-Item -LiteralPath $expectedExecutable -Destination $deliveryExecutable -Force
+
+    if (-not (Test-Path -LiteralPath $deliveryExecutable -PathType Leaf))
+    {
+        throw "未能将发布结果复制到工作区根目录：$deliveryExecutable"
+    }
+
+    $publishedHash = Get-FileHash -LiteralPath $expectedExecutable -Algorithm SHA256
+    $deliveryHash = Get-FileHash -LiteralPath $deliveryExecutable -Algorithm SHA256
+
+    if ($publishedHash.Hash -ne $deliveryHash.Hash)
+    {
+        throw "根目录交付文件与发布文件的 SHA256 不一致。"
+    }
+
+    if (Test-Path -LiteralPath $legacyDeliveryExecutable -PathType Leaf)
+    {
+        Remove-Item -LiteralPath $legacyDeliveryExecutable -Force
+    }
+
     $hash = Get-FileHash -LiteralPath $expectedExecutable -Algorithm SHA256
     $fileInfo = Get-Item -LiteralPath $expectedExecutable
     Write-Host "`n发布成功" -ForegroundColor Green
-    Write-Host "文件：$($fileInfo.FullName)"
+    Write-Host "发布文件：$($fileInfo.FullName)"
+    Write-Host "交付文件：$deliveryExecutable"
     Write-Host "大小：$($fileInfo.Length) bytes"
     Write-Host "SHA256：$($hash.Hash)"
 }

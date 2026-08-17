@@ -2,6 +2,7 @@
 using CH32UpperComputer.Infrastructure.Serial;
 using CH32UpperComputer.Infrastructure.Settings;
 using CH32UpperComputer.Infrastructure.Transactions;
+using CH32UpperComputer.Infrastructure.Coordination;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -26,9 +27,29 @@ namespace CH32UpperComputer.App.ViewModels
         private readonly ModbusTransactionCoordinator coordinator;
 
         /// <summary>
+        /// 合并系统串口表与 PnP 友好名称的可替换发现服务。
+        /// </summary>
+        private readonly ISerialPortDiscovery serialPortDiscovery;
+
+        /// <summary>
         /// 将后台状态事件切换到界面线程的调度器。
         /// </summary>
         private readonly IUiDispatcher dispatcher;
+
+        /// <summary>
+        /// 在固件升级期间禁止新建串口连接和编辑活动设置。
+        /// </summary>
+        private readonly IApplicationOperationGate applicationOperationGate;
+
+        /// <summary>
+        /// 保护热插拔防抖取消源的替换与释放。
+        /// </summary>
+        private readonly object portRefreshSyncRoot = new();
+
+        /// <summary>
+        /// 当前热插拔防抖等待使用的取消源。
+        /// </summary>
+        private CancellationTokenSource? portRefreshCancellation;
 
         /// <summary>
         /// 指示 ViewModel 已经释放并停止接收后台事件。
@@ -38,7 +59,6 @@ namespace CH32UpperComputer.App.ViewModels
         /// <summary>
         /// 当前选择的操作系统串口名称。
         /// </summary>
-        [ObservableProperty]
         private string portName;
 
         /// <summary>
@@ -114,25 +134,41 @@ namespace CH32UpperComputer.App.ViewModels
         private string errorMessage = string.Empty;
 
         /// <summary>
+        /// 当前串口发现数量、推荐设备或驱动检查提示。
+        /// </summary>
+        [ObservableProperty]
+        private string portDiscoveryStatus = "正在识别串口…";
+
+        /// <summary>
         /// 初始化串口连接 ViewModel，并应用经过验证的持久化设置。
         /// </summary>
         /// <param name="transport">负责实际打开、关闭和单循环读取的串口传输。</param>
         /// <param name="coordinator">负责接收循环和无队列事务状态的协调器。</param>
+        /// <param name="serialPortDiscovery">负责异步合并端口号和 PnP 友好名称的发现服务。</param>
         /// <param name="dispatcher">负责把后台事件投递到界面线程的调度器。</param>
         /// <param name="settings">已经由设置存储校验并强制关闭自动发送的初始设置。</param>
+        /// <param name="applicationOperationGate">
+        /// 可选应用级通信门；为空时创建仅供本 ViewModel 使用的独立门。
+        /// </param>
         public SerialConnectionViewModel(
             ISerialTransport transport,
             ModbusTransactionCoordinator coordinator,
+            ISerialPortDiscovery serialPortDiscovery,
             IUiDispatcher dispatcher,
-            AppSettings settings)
+            AppSettings settings,
+            IApplicationOperationGate? applicationOperationGate = null)
         {
             ArgumentNullException.ThrowIfNull(transport);
             ArgumentNullException.ThrowIfNull(coordinator);
+            ArgumentNullException.ThrowIfNull(serialPortDiscovery);
             ArgumentNullException.ThrowIfNull(dispatcher);
             ArgumentNullException.ThrowIfNull(settings);
             this.transport = transport;
             this.coordinator = coordinator;
+            this.serialPortDiscovery = serialPortDiscovery;
             this.dispatcher = dispatcher;
+            this.applicationOperationGate =
+                applicationOperationGate ?? new ApplicationOperationGate();
             AppSettings safeSettings = settings.CreateValidatedCopy();
             portName = safeSettings.PortName;
             baudRate = safeSettings.BaudRate;
@@ -142,18 +178,20 @@ namespace CH32UpperComputer.App.ViewModels
             slaveAddress = safeSettings.SlaveAddress;
             responseTimeoutMilliseconds = safeSettings.ResponseTimeoutMilliseconds;
             rawInterByteTimeoutMilliseconds = safeSettings.RawInterByteTimeoutMilliseconds;
-            AvailablePorts = new ObservableCollection<string>();
+            AvailablePorts = new ObservableCollection<SerialPortDescriptor>();
             BaudRates = Array.AsReadOnly(new[] { 2400, 4800, 9600, 19200, 38400, 57600 });
             DataBitOptions = Array.AsReadOnly(new[] { 5, 6, 7, 8 });
             ParityOptions = Array.AsReadOnly(new[] { Parity.None, Parity.Even, Parity.Odd, Parity.Mark, Parity.Space });
             StopBitOptions = Array.AsReadOnly(new[] { StopBits.One, StopBits.Two, StopBits.OnePointFive });
             ConnectCommand = new AsyncRelayCommand(ConnectAsync, CanConnect);
             DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, CanDisconnect);
-            RefreshPortsCommand = new RelayCommand(RefreshPorts, CanEditSettings);
+            RefreshPortsCommand = new AsyncRelayCommand(RefreshPortsFromCommandAsync, CanRefreshPorts);
             ResetDefaultsCommand = new RelayCommand(ResetDefaults, CanEditSettings);
             coordinator.BusyChanged += HandleBusyChanged;
             coordinator.StateChanged += HandleCoordinatorStateChanged;
-            RefreshPorts();
+            transport.CleanupPendingChanged += HandleCleanupPendingChanged;
+            this.applicationOperationGate.IapActivityChanged +=
+                HandleIapActivityChanged;
         }
 
         /// <summary>
@@ -162,9 +200,38 @@ namespace CH32UpperComputer.App.ViewModels
         public event Action? SettingsChanged;
 
         /// <summary>
+        /// 获取或设置准备打开的串口名称；活动会话切换期间锁定已经实际打开的端口。
+        /// </summary>
+        public string PortName
+        {
+            get => portName;
+            set
+            {
+                string candidate = value ?? string.Empty;
+                bool protectsActiveSession =
+                    IsConnected ||
+                    IsConnectionOperationBusy ||
+                    transport.IsOpen ||
+                    transport.IsCleanupPending ||
+                    applicationOperationGate.IsIapActive;
+
+                if (protectsActiveSession &&
+                    !string.Equals(
+                        candidate,
+                        portName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                SetProperty(ref portName, candidate);
+            }
+        }
+
+        /// <summary>
         /// 获取当前检测到的操作系统串口名称集合。
         /// </summary>
-        public ObservableCollection<string> AvailablePorts { get; }
+        public ObservableCollection<SerialPortDescriptor> AvailablePorts { get; }
 
         /// <summary>
         /// 获取固件明确支持的波特率集合。
@@ -187,6 +254,11 @@ namespace CH32UpperComputer.App.ViewModels
         public IReadOnlyList<StopBits> StopBitOptions { get; }
 
         /// <summary>
+        /// 获取当前是否允许编辑串口参数。
+        /// </summary>
+        public bool CanEditSerialSettings => CanEditSettings();
+
+        /// <summary>
         /// 获取打开当前串口的异步命令。
         /// </summary>
         public IAsyncRelayCommand ConnectCommand { get; }
@@ -199,7 +271,7 @@ namespace CH32UpperComputer.App.ViewModels
         /// <summary>
         /// 获取刷新系统串口列表的命令。
         /// </summary>
-        public IRelayCommand RefreshPortsCommand { get; }
+        public IAsyncRelayCommand RefreshPortsCommand { get; }
 
         /// <summary>
         /// 获取只恢复配置、不连接且不发送任何指令的默认值命令。
@@ -215,6 +287,79 @@ namespace CH32UpperComputer.App.ViewModels
         /// 获取接收缓存最大容量只读说明。
         /// </summary>
         public int ReceiveBufferBytes => 4096;
+
+        /// <summary>
+        /// 立即执行一次异步串口枚举，并在界面线程原子替换下拉列表。
+        /// </summary>
+        /// <param name="cancellationToken">取消尚未完成的系统设备查询。</param>
+        /// <returns>系统查询和界面状态提交完成后的任务。</returns>
+        public async Task RefreshPortsAsync(CancellationToken cancellationToken)
+        {
+            SerialPortDiscoveryResult result;
+
+            try
+            {
+                result = await serialPortDiscovery
+                    .DiscoverAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                result = new SerialPortDiscoveryResult(
+                    Array.Empty<SerialPortDescriptor>(),
+                    $"串口识别失败：{exception.Message} 请检查 USB 连接和 WCH/CH340 驱动。");
+            }
+
+            if (dispatcher.CheckAccess)
+            {
+                ApplyDiscoveredPorts(result);
+                return;
+            }
+
+            TaskCompletionSource completion = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            dispatcher.Post(
+                () =>
+                {
+                    try
+                    {
+                        ApplyDiscoveredPorts(result);
+                        completion.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        completion.TrySetException(exception);
+                    }
+                });
+            await completion.Task.ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 以 250 毫秒防抖安排一次热插拔串口刷新，不在窗口消息处理函数中执行设备查询。
+        /// </summary>
+        public void SchedulePortRefresh()
+        {
+            CancellationTokenSource cancellation;
+
+            lock (portRefreshSyncRoot)
+            {
+                if (isDisposed)
+                {
+                    return;
+                }
+
+                portRefreshCancellation?.Cancel();
+                portRefreshCancellation?.Dispose();
+                portRefreshCancellation = new CancellationTokenSource();
+                cancellation = portRefreshCancellation;
+            }
+
+            _ = RefreshPortsAfterDelayAsync(cancellation);
+        }
 
         /// <summary>
         /// 根据当前界面参数创建经过完整校验的不可变串口设置。
@@ -278,6 +423,16 @@ namespace CH32UpperComputer.App.ViewModels
             isDisposed = true;
             coordinator.BusyChanged -= HandleBusyChanged;
             coordinator.StateChanged -= HandleCoordinatorStateChanged;
+            transport.CleanupPendingChanged -= HandleCleanupPendingChanged;
+            applicationOperationGate.IapActivityChanged -=
+                HandleIapActivityChanged;
+
+            lock (portRefreshSyncRoot)
+            {
+                portRefreshCancellation?.Cancel();
+                portRefreshCancellation?.Dispose();
+                portRefreshCancellation = null;
+            }
         }
 
         /// <summary>
@@ -335,7 +490,9 @@ namespace CH32UpperComputer.App.ViewModels
             finally
             {
                 IsConnected = false;
-                ConnectionStatus = "未连接";
+                ConnectionStatus = transport.IsCleanupPending
+                    ? "已断开 · 串口驱动仍在释放"
+                    : "未连接";
                 IsConnectionOperationBusy = false;
                 NotifyCommandStates();
             }
@@ -365,29 +522,84 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 重新枚举系统串口，并在当前端口不存在时保留用户原选择供手工输入。
+        /// 响应刷新按钮并执行一次完整异步串口发现。
         /// </summary>
-        private void RefreshPorts()
+        /// <returns>系统查询和界面提交完成后的任务。</returns>
+        private Task RefreshPortsFromCommandAsync()
         {
-            string[] ports = SerialPort.GetPortNames()
-                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            return RefreshPortsAsync(CancellationToken.None);
+        }
+
+        /// <summary>
+        /// 等待热插拔防抖窗口后执行串口发现，并隔离已经被后续事件取消的旧刷新。
+        /// </summary>
+        /// <param name="cancellation">本次防抖代次独占的取消源。</param>
+        /// <returns>防抖取消或刷新完成后的任务。</returns>
+        private async Task RefreshPortsAfterDelayAsync(CancellationTokenSource cancellation)
+        {
+            try
+            {
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(250),
+                    cancellation.Token).ConfigureAwait(false);
+                await RefreshPortsAsync(cancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                // 新插拔事件或 ViewModel 释放已经取代本次刷新。
+            }
+        }
+
+        /// <summary>
+        /// 在界面线程替换端口列表，并按断开状态和项目设备优先级选择安全默认端口。
+        /// </summary>
+        /// <param name="result">后台发现服务产生的不可变端口结果。</param>
+        private void ApplyDiscoveredPorts(SerialPortDiscoveryResult result)
+        {
+            ArgumentNullException.ThrowIfNull(result);
             AvailablePorts.Clear();
 
-            foreach (string port in ports)
+            foreach (SerialPortDescriptor port in result.Ports)
             {
                 AvailablePorts.Add(port);
             }
 
-            if (!string.IsNullOrWhiteSpace(PortName) && !AvailablePorts.Contains(PortName))
+            SerialPortDescriptor? preferred = result.Ports
+                .FirstOrDefault(port => port.IsPreferredUsbDevice);
+            bool currentExists = result.Ports.Any(
+                port => string.Equals(
+                    port.PortName,
+                    PortName,
+                    StringComparison.OrdinalIgnoreCase));
+
+            if (!IsConnected &&
+                (string.IsNullOrWhiteSpace(PortName) ||
+                 !currentExists ||
+                 string.Equals(PortName, "COM1", StringComparison.OrdinalIgnoreCase)))
             {
-                AvailablePorts.Insert(0, PortName);
+                SerialPortDescriptor? selected = preferred ?? result.Ports.FirstOrDefault();
+
+                if (selected is not null)
+                {
+                    PortName = selected.PortName;
+                }
             }
 
-            if (AvailablePorts.Count == 0)
+            if (!string.IsNullOrWhiteSpace(result.DiagnosticMessage))
             {
-                AvailablePorts.Add("COM1");
+                PortDiscoveryStatus = result.DiagnosticMessage;
             }
+            else if (preferred is not null)
+            {
+                PortDiscoveryStatus =
+                    $"已识别 {result.Ports.Count} 个串口 · 推荐 {preferred.DisplayName}";
+            }
+            else
+            {
+                PortDiscoveryStatus = $"已识别 {result.Ports.Count} 个串口";
+            }
+
+            NotifyCommandStates();
         }
 
         /// <summary>
@@ -414,7 +626,11 @@ namespace CH32UpperComputer.App.ViewModels
         /// <returns>未连接、无连接操作且无活动事务时返回真。</returns>
         private bool CanConnect()
         {
-            return !IsConnected && !IsConnectionOperationBusy && !IsTransactionBusy;
+            return !IsConnected &&
+                !IsConnectionOperationBusy &&
+                !IsTransactionBusy &&
+                !applicationOperationGate.IsIapActive &&
+                !transport.IsCleanupPending;
         }
 
         /// <summary>
@@ -423,7 +639,16 @@ namespace CH32UpperComputer.App.ViewModels
         /// <returns>已连接且没有连接操作或活动事务时返回真。</returns>
         private bool CanDisconnect()
         {
-            return IsConnected && !IsConnectionOperationBusy && !IsTransactionBusy;
+            return IsConnected && !IsConnectionOperationBusy;
+        }
+
+        /// <summary>
+        /// 获取当前状态是否允许主动刷新串口列表。
+        /// </summary>
+        /// <returns>没有连接或断开操作占用界面时返回真。</returns>
+        private bool CanRefreshPorts()
+        {
+            return !IsConnectionOperationBusy;
         }
 
         /// <summary>
@@ -432,7 +657,39 @@ namespace CH32UpperComputer.App.ViewModels
         /// <returns>未连接且没有连接操作时返回真。</returns>
         private bool CanEditSettings()
         {
-            return !IsConnected && !IsConnectionOperationBusy;
+            return !IsConnected &&
+                !IsConnectionOperationBusy &&
+                !applicationOperationGate.IsIapActive;
+        }
+
+        /// <summary>
+        /// 接收 IAP 互斥变化并刷新连接、编辑状态和暂停提示。
+        /// </summary>
+        /// <param name="isActive">固件升级是否正在独占应用通信。</param>
+        private void HandleIapActivityChanged(bool isActive)
+        {
+            dispatcher.Post(
+                () =>
+                {
+                    OnPropertyChanged(nameof(CanEditSerialSettings));
+
+                    if (isActive)
+                    {
+                        ConnectionStatus = IsConnected
+                            ? "已连接 · 固件升级期间 Modbus 操作已暂停"
+                            : "未连接 · 固件升级期间禁止新建串口连接";
+                    }
+                    else if (IsConnected)
+                    {
+                        ConnectionStatus = "已连接 · 等待手动指令";
+                    }
+                    else
+                    {
+                        ConnectionStatus = "未连接";
+                    }
+
+                    NotifyCommandStates();
+                });
         }
 
         /// <summary>
@@ -475,7 +732,29 @@ namespace CH32UpperComputer.App.ViewModels
                 () =>
                 {
                     IsConnected = false;
-                    ConnectionStatus = "未连接";
+                    ConnectionStatus = transport.IsCleanupPending
+                        ? "已断开 · 串口驱动仍在释放"
+                        : "未连接";
+                    NotifyCommandStates();
+                });
+        }
+
+        /// <summary>
+        /// 接收底层驱动物理清理状态，并在清理完成后自动恢复连接按钮。
+        /// </summary>
+        /// <param name="isPending">旧串口会话仍在后台释放时为真。</param>
+        private void HandleCleanupPendingChanged(bool isPending)
+        {
+            dispatcher.Post(
+                () =>
+                {
+                    if (!IsConnected)
+                    {
+                        ConnectionStatus = isPending
+                            ? "已断开 · 串口驱动仍在释放"
+                            : "未连接";
+                    }
+
                     NotifyCommandStates();
                 });
         }

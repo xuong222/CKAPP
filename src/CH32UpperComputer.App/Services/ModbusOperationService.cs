@@ -62,7 +62,7 @@ namespace CH32UpperComputer.App.Services
     /// <summary>
     /// 统一执行应用层手动标准或原始请求，并集中完成日志、统计和数据快照更新。
     /// </summary>
-    public sealed class ModbusOperationService
+    public sealed class ModbusOperationService : IDisposable
     {
         /// <summary>
         /// 保护会话统计快照的一致性。
@@ -135,6 +135,11 @@ namespace CH32UpperComputer.App.Services
         private TimeSpan? lastResponseDuration;
 
         /// <summary>
+        /// 指示线路诊断事件订阅已经解除。
+        /// </summary>
+        private int disposedFlag;
+
+        /// <summary>
         /// 初始化统一的应用层 Modbus 操作服务。
         /// </summary>
         /// <param name="coordinator">所有请求共用的无队列事务协调器。</param>
@@ -159,6 +164,7 @@ namespace CH32UpperComputer.App.Services
             this.deviceSnapshot = deviceSnapshot;
             this.logService = logService;
             this.timeProvider = timeProvider;
+            coordinator.DiagnosticRecorded += HandleDiagnosticRecorded;
         }
 
         /// <summary>
@@ -201,6 +207,19 @@ namespace CH32UpperComputer.App.Services
         public DeviceSnapshot DeviceSnapshot => deviceSnapshot;
 
         /// <summary>
+        /// 解除协调器线路诊断订阅；通信服务的其余资源由应用组合根分别释放。
+        /// </summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposedFlag, 1) != 0)
+            {
+                return;
+            }
+
+            coordinator.DiagnosticRecorded -= HandleDiagnosticRecorded;
+        }
+
+        /// <summary>
         /// 尝试立即执行一个标准或原始事务，不建立任何等待队列。
         /// </summary>
         /// <param name="request">已经完成帧、模式和超时校验的不可变事务请求。</param>
@@ -215,27 +234,105 @@ namespace CH32UpperComputer.App.Services
 
             try
             {
-                long startedTimestamp = timeProvider.GetTimestamp();
-                DateTimeOffset startedAt = timeProvider.GetUtcNow();
-                TransactionExecutionResult result = await coordinator.TryExecuteAsync(
+                return await ExecuteCoreAsync(
                     request,
-                    cancellationToken).ConfigureAwait(false);
-
-                if (!result.IsAccepted)
-                {
-                    InvokeObservers(OperationCompleted, result);
-                    InvokeObservers(OperationRecorded, request, result);
-                    return result;
-                }
-
-                TimeSpan elapsed = timeProvider.GetElapsedTime(startedTimestamp);
-                RecordAcceptedResult(request, result, startedAt, elapsed);
-                return result;
+                    cancellationToken,
+                    coordinator.TryExecuteAsync).ConfigureAwait(false);
             }
             finally
             {
                 LeaveOperation();
             }
+        }
+
+        /// <summary>
+        /// 尝试立即创建一个跨多项事务保持协调器唯一活动门的应用操作序列。
+        /// </summary>
+        /// <returns>成功时返回独占序列；Busy、断开、重同步或退出时返回空值。</returns>
+        public ModbusOperationSequence? TryBeginSequence()
+        {
+            ModbusTransactionSequenceLease? transactionLease =
+                coordinator.TryAcquireSequence();
+
+            if (transactionLease is null)
+            {
+                return null;
+            }
+
+            EnterOperation();
+            return new ModbusOperationSequence(this, transactionLease);
+        }
+
+        /// <summary>
+        /// 在指定底层独占租约中执行事务，并记录日志、快照和统计。
+        /// </summary>
+        /// <param name="transactionLease">当前应用序列持有的协调器租约。</param>
+        /// <param name="request">需要顺序执行的不可变事务请求。</param>
+        /// <param name="cancellationToken">取消当前事务的令牌。</param>
+        /// <returns>当前事务的唯一终态或立即拒绝结果。</returns>
+        internal ValueTask<TransactionExecutionResult> ExecuteSequenceTransactionAsync(
+            ModbusTransactionSequenceLease transactionLease,
+            TransactionRequest request,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(transactionLease);
+            return ExecuteCoreAsync(
+                request,
+                cancellationToken,
+                transactionLease.ExecuteAsync);
+        }
+
+        /// <summary>
+        /// 释放底层独占租约，并保证应用活动操作计数只离开一次。
+        /// </summary>
+        /// <param name="transactionLease">需要释放的协调器独占租约。</param>
+        /// <returns>底层租约释放完成后的值任务。</returns>
+        internal async ValueTask EndSequenceAsync(
+            ModbusTransactionSequenceLease transactionLease)
+        {
+            ArgumentNullException.ThrowIfNull(transactionLease);
+
+            try
+            {
+                await transactionLease.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                LeaveOperation();
+            }
+        }
+
+        /// <summary>
+        /// 执行一项普通或序列内事务，并复用唯一日志、快照、统计和观察者路径。
+        /// </summary>
+        /// <param name="request">已经完成校验的不可变事务请求。</param>
+        /// <param name="cancellationToken">取消当前事务的令牌。</param>
+        /// <param name="executeTransaction">普通协调器或独占序列的实际执行入口。</param>
+        /// <returns>事务唯一终态或立即拒绝结果。</returns>
+        private async ValueTask<TransactionExecutionResult> ExecuteCoreAsync(
+            TransactionRequest request,
+            CancellationToken cancellationToken,
+            Func<TransactionRequest, CancellationToken, ValueTask<TransactionExecutionResult>>
+                executeTransaction)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(executeTransaction);
+            long startedTimestamp = timeProvider.GetTimestamp();
+            DateTimeOffset startedAt = timeProvider.GetUtcNow();
+            TransactionExecutionResult result = await executeTransaction(
+                request,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!result.IsAccepted)
+            {
+                InvokeObservers(OperationCompleted, result);
+                InvokeObservers(OperationRecorded, request, result);
+                return result;
+            }
+
+            TimeSpan elapsed = timeProvider.GetElapsedTime(startedTimestamp);
+            RecordAcceptedResult(request, result, startedAt, elapsed);
+            return result;
         }
 
         /// <summary>
@@ -261,6 +358,18 @@ namespace CH32UpperComputer.App.Services
         /// <param name="request">定时服务当前代次实际使用的不可变事务请求。</param>
         /// <param name="result">定时服务发布的 Busy 拒绝或唯一事务终态。</param>
         public void RecordScheduledResult(
+            TransactionRequest request,
+            TransactionExecutionResult result)
+        {
+            RecordExternalResult(request, result);
+        }
+
+        /// <summary>
+        /// 将专用配置等已经通过同一协调器完成的外部结果纳入统一日志、统计和界面投影。
+        /// </summary>
+        /// <param name="request">外部流程实际提交的不可变事务请求。</param>
+        /// <param name="result">外部流程收到的 Busy 拒绝或唯一事务终态。</param>
+        public void RecordExternalResult(
             TransactionRequest request,
             TransactionExecutionResult result)
         {
@@ -352,6 +461,34 @@ namespace CH32UpperComputer.App.Services
                 0,
                 ReadOnlySpan<byte>.Empty,
                 $"事务 #{outcome.TransactionId} · {outcome.Message}");
+        }
+
+        /// <summary>
+        /// 将带原始字节的迟到、无归属和签名不匹配诊断接入统一通信日志。
+        /// </summary>
+        /// <param name="diagnostic">协调器已经完成分类和有界缓存的不可变诊断。</param>
+        private void HandleDiagnosticRecorded(TransactionDiagnostic diagnostic)
+        {
+            ArgumentNullException.ThrowIfNull(diagnostic);
+
+            if (diagnostic.Data.IsEmpty ||
+                diagnostic.Kind is not (
+                    TransactionDiagnosticKind.MismatchedResponse or
+                    TransactionDiagnosticKind.Unsolicited or
+                    TransactionDiagnosticKind.LateOrUnsolicited))
+            {
+                return;
+            }
+
+            ReadOnlyMemory<byte> data = diagnostic.Data;
+            logService.Append(
+                diagnostic.TransactionId,
+                CommunicationDirection.LateOrUnsolicited,
+                null,
+                diagnostic.PortGeneration,
+                diagnostic.ReceiveSequence,
+                data.Span,
+                $"线路诊断 · {diagnostic.Message}");
         }
 
         /// <summary>

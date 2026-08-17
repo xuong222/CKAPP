@@ -1,6 +1,7 @@
 ﻿using CH32UpperComputer.App.Services;
 using CH32UpperComputer.Core.Protocol;
 using CH32UpperComputer.Core.Registers;
+using CH32UpperComputer.Infrastructure.Coordination;
 using CH32UpperComputer.Infrastructure.Transactions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -11,12 +12,12 @@ using System.ComponentModel;
 namespace CH32UpperComputer.App.ViewModels
 {
     /// <summary>
-    /// 管理普通可写参数组、手动读取和地址/波特率/恢复出厂独立安全流程。
+    /// 管理 40001 至 40036 统一寄存器表、普通读写和三项独立安全配置流程。
     /// </summary>
     public sealed partial class ParametersViewModel : ObservableObject, IDisposable
     {
         /// <summary>
-        /// 复用标准请求、日志、统计和快照路径的收发 ViewModel。
+        /// 复用标准请求构建、当前超时和普通事务入口的收发 ViewModel。
         /// </summary>
         private readonly CommandConsoleViewModel commandConsole;
 
@@ -31,7 +32,7 @@ namespace CH32UpperComputer.App.ViewModels
         private readonly SpecialConfigurationService specialConfigurationService;
 
         /// <summary>
-        /// 提供成功 0x03 更新通知和设备快照的统一操作服务。
+        /// 提供成功 0x03 快照、统一日志统计和独占事务序列的操作服务。
         /// </summary>
         private readonly ModbusOperationService operationService;
 
@@ -41,9 +42,19 @@ namespace CH32UpperComputer.App.ViewModels
         private readonly IUiDispatcher dispatcher;
 
         /// <summary>
-        /// 当前页面自身是否正在等待一次专用配置流程。
+        /// 在 IAP 独占期间禁用参数读写和专用流程。
+        /// </summary>
+        private readonly IApplicationOperationGate applicationOperationGate;
+
+        /// <summary>
+        /// 当前页面是否正在执行一次读取、写入或专用配置操作。
         /// </summary>
         private bool isLocalOperationBusy;
+
+        /// <summary>
+        /// 指示名称点击引发的批量选择同步正在进行，避免发布中间状态。
+        /// </summary>
+        private bool isSynchronizingSelection;
 
         /// <summary>
         /// 指示 ViewModel 已释放并停止接收事件。
@@ -51,16 +62,18 @@ namespace CH32UpperComputer.App.ViewModels
         private bool isDisposed;
 
         /// <summary>
-        /// 当前选择的连续参数组。
+        /// 当前选择数量、读取能力和修改限制的即时说明。
         /// </summary>
         [ObservableProperty]
-        private ParameterGroupViewModel? selectedGroup;
+        private string selectionSummary =
+            "未选择寄存器；勾选后可读取，普通可写项可修改。";
 
         /// <summary>
         /// 参数页最近一次校验或事务结果说明。
         /// </summary>
         [ObservableProperty]
-        private string statusMessage = "进入页面不会自动读取，请手动选择读取范围。";
+        private string statusMessage =
+            "进入页面不会自动读取；可读取全部、读取选中或使用行内读取。";
 
         /// <summary>
         /// 用户准备写入的目标从站地址。
@@ -84,22 +97,27 @@ namespace CH32UpperComputer.App.ViewModels
         /// 0xFE 查询必须始终显示的固定风险文案。
         /// </summary>
         [ObservableProperty]
-        private string unknownAddressWarning = SpecialConfigurationService.UnknownAddressRiskWarning;
+        private string unknownAddressWarning =
+            SpecialConfigurationService.UnknownAddressRiskWarning;
 
         /// <summary>
-        /// 初始化参数组及全部手动读取、保存和特殊配置命令。
+        /// 初始化统一寄存器表及全部读取、修改和特殊配置命令。
         /// </summary>
-        /// <param name="commandConsole">复用标准事务执行路径的收发 ViewModel。</param>
+        /// <param name="commandConsole">复用标准事务构建和执行路径的收发 ViewModel。</param>
         /// <param name="serialConnection">提供当前连接参数和共享忙状态的串口 ViewModel。</param>
         /// <param name="specialConfigurationService">执行独立安全配置流程的服务。</param>
-        /// <param name="operationService">提供设备快照和成功更新通知的服务。</param>
+        /// <param name="operationService">提供设备快照、统一记录和独占序列的服务。</param>
         /// <param name="dispatcher">负责把后台事件投递到界面线程的调度器。</param>
+        /// <param name="applicationOperationGate">
+        /// 可选应用级通信门；为空时创建独立门保持旧构造兼容。
+        /// </param>
         public ParametersViewModel(
             CommandConsoleViewModel commandConsole,
             SerialConnectionViewModel serialConnection,
             SpecialConfigurationService specialConfigurationService,
             ModbusOperationService operationService,
-            IUiDispatcher dispatcher)
+            IUiDispatcher dispatcher,
+            IApplicationOperationGate? applicationOperationGate = null)
         {
             ArgumentNullException.ThrowIfNull(commandConsole);
             ArgumentNullException.ThrowIfNull(serialConnection);
@@ -111,26 +129,59 @@ namespace CH32UpperComputer.App.ViewModels
             this.specialConfigurationService = specialConfigurationService;
             this.operationService = operationService;
             this.dispatcher = dispatcher;
-            ParameterGroups = new ObservableCollection<ParameterGroupViewModel>(CreateParameterGroups());
-            selectedGroup = ParameterGroups.FirstOrDefault();
+            this.applicationOperationGate =
+                applicationOperationGate ?? new ApplicationOperationGate();
+            Registers = new ObservableCollection<ParameterItemViewModel>(
+                DeviceRegisterMap.All.Select(
+                    definition => new ParameterItemViewModel(definition)));
             targetSlaveAddress = serialConnection.SlaveAddress;
             targetBaudRate = serialConnection.BaudRate;
-            ReadAllCommand = new AsyncRelayCommand(ReadAllAsync, CanExecuteStandardOperation);
-            ReadSelectedGroupCommand = new AsyncRelayCommand(ReadSelectedGroupAsync, CanExecuteSelectedGroupOperation);
-            SaveSelectedGroupCommand = new AsyncRelayCommand(SaveSelectedGroupAsync, CanExecuteSelectedGroupOperation);
-            ChangeAddressCommand = new AsyncRelayCommand(ChangeAddressAsync, CanExecuteSpecialOperation);
-            ChangeBaudRateCommand = new AsyncRelayCommand(ChangeBaudRateAsync, CanExecuteSpecialOperation);
-            RestoreFactoryCommand = new AsyncRelayCommand(RestoreFactoryAsync, CanRestoreFactory);
-            DiscoverAddressCommand = new AsyncRelayCommand(DiscoverAddressAsync, CanExecuteSpecialOperation);
+            ReadAllCommand = new AsyncRelayCommand(
+                ReadAllAsync,
+                CanExecuteStandardOperation);
+            ReadSelectedCommand = new AsyncRelayCommand(
+                ReadSelectedAsync,
+                CanExecuteReadSelected);
+            ModifySelectedCommand = new AsyncRelayCommand(
+                ModifySelectedAsync,
+                CanExecuteModifySelected);
+            ReadItemCommand = new AsyncRelayCommand<ParameterItemViewModel>(
+                ReadItemAsync,
+                CanReadItem);
+            ModifyItemCommand = new AsyncRelayCommand<ParameterItemViewModel>(
+                ModifyItemAsync,
+                CanModifyItem);
+            SelectItemCommand = new RelayCommand<ParameterItemViewModel>(
+                SelectItem);
+            ChangeAddressCommand = new AsyncRelayCommand(
+                ChangeAddressAsync,
+                CanExecuteSpecialOperation);
+            ChangeBaudRateCommand = new AsyncRelayCommand(
+                ChangeBaudRateAsync,
+                CanExecuteSpecialOperation);
+            RestoreFactoryCommand = new AsyncRelayCommand(
+                RestoreFactoryAsync,
+                CanRestoreFactory);
+            DiscoverAddressCommand = new AsyncRelayCommand(
+                DiscoverAddressAsync,
+                CanExecuteSpecialOperation);
+
+            foreach (ParameterItemViewModel item in Registers)
+            {
+                item.PropertyChanged += HandleRegisterItemPropertyChanged;
+            }
+
             operationService.SnapshotUpdated += HandleSnapshotUpdated;
             serialConnection.PropertyChanged += HandleSerialConnectionPropertyChanged;
+            this.applicationOperationGate.IapActivityChanged +=
+                HandleIapActivityChanged;
             RefreshFromSnapshot();
         }
 
         /// <summary>
-        /// 获取两个互不排队的连续普通参数组。
+        /// 获取按协议地址升序排列的完整 40001 至 40036 统一寄存器表。
         /// </summary>
-        public ObservableCollection<ParameterGroupViewModel> ParameterGroups { get; }
+        public ObservableCollection<ParameterItemViewModel> Registers { get; }
 
         /// <summary>
         /// 获取手动读取全部 40001 至 40036 的命令。
@@ -138,14 +189,29 @@ namespace CH32UpperComputer.App.ViewModels
         public IAsyncRelayCommand ReadAllCommand { get; }
 
         /// <summary>
-        /// 获取手动读取当前连续参数组的命令。
+        /// 获取读取任意选中寄存器最小至最大地址跨度的命令。
         /// </summary>
-        public IAsyncRelayCommand ReadSelectedGroupCommand { get; }
+        public IAsyncRelayCommand ReadSelectedCommand { get; }
 
         /// <summary>
-        /// 获取完整预校验当前组后以单个 0x10 写入的命令。
+        /// 获取对同一普通可写组中的选中项执行单项或批量修改的命令。
         /// </summary>
-        public IAsyncRelayCommand SaveSelectedGroupCommand { get; }
+        public IAsyncRelayCommand ModifySelectedCommand { get; }
+
+        /// <summary>
+        /// 获取读取单个参数行的命令。
+        /// </summary>
+        public IAsyncRelayCommand<ParameterItemViewModel> ReadItemCommand { get; }
+
+        /// <summary>
+        /// 获取使用 0x06 修改单个普通可写参数行的命令。
+        /// </summary>
+        public IAsyncRelayCommand<ParameterItemViewModel> ModifyItemCommand { get; }
+
+        /// <summary>
+        /// 获取点击寄存器名称时选中当前行的命令。
+        /// </summary>
+        public IRelayCommand<ParameterItemViewModel> SelectItemCommand { get; }
 
         /// <summary>
         /// 获取调用独立地址修改流程的命令。
@@ -168,7 +234,7 @@ namespace CH32UpperComputer.App.ViewModels
         public IAsyncRelayCommand DiscoverAddressCommand { get; }
 
         /// <summary>
-        /// 取消快照和串口状态事件订阅。
+        /// 取消快照、寄存器行和串口状态事件订阅。
         /// </summary>
         public void Dispose()
         {
@@ -180,73 +246,355 @@ namespace CH32UpperComputer.App.ViewModels
             isDisposed = true;
             operationService.SnapshotUpdated -= HandleSnapshotUpdated;
             serialConnection.PropertyChanged -= HandleSerialConnectionPropertyChanged;
+            applicationOperationGate.IapActivityChanged -=
+                HandleIapActivityChanged;
+
+            foreach (ParameterItemViewModel item in Registers)
+            {
+                item.PropertyChanged -= HandleRegisterItemPropertyChanged;
+                item.Dispose();
+            }
         }
 
         /// <summary>
         /// 手动读取完整设备寄存器表，不在进入页面时自动执行。
         /// </summary>
         /// <returns>标准 0x03 事务完成后的任务。</returns>
-        private async Task ReadAllAsync()
+        private Task ReadAllAsync()
         {
-            ModbusRequest request = ModbusRequestFactory.CreateReadHoldingRegisters(
-                CurrentSlaveAddress,
-                0x0000,
-                36);
-            TransactionExecutionResult result = await commandConsole.ExecuteStandardAsync(
-                request,
-                CancellationToken.None).ConfigureAwait(true);
-            StatusMessage = result.Message;
-        }
-
-        /// <summary>
-        /// 手动读取当前选择的连续参数组。
-        /// </summary>
-        /// <returns>标准 0x03 事务完成后的任务。</returns>
-        private async Task ReadSelectedGroupAsync()
-        {
-            ParameterGroupViewModel group = SelectedGroup!;
-            ModbusRequest request = ModbusRequestFactory.CreateReadHoldingRegisters(
-                CurrentSlaveAddress,
-                group.StartAddress,
-                group.Quantity);
-            TransactionExecutionResult result = await commandConsole.ExecuteStandardAsync(
-                request,
-                CancellationToken.None).ConfigureAwait(true);
-            StatusMessage = result.Message;
-        }
-
-        /// <summary>
-        /// 完整预校验当前组全部值，任一无效时保持零写入，全部合法才构建一个 0x10。
-        /// </summary>
-        /// <returns>校验失败或单个标准写事务完成后的任务。</returns>
-        private async Task SaveSelectedGroupAsync()
-        {
-            ParameterGroupViewModel group = SelectedGroup!;
-            ushort[] rawWords = new ushort[group.Items.Count];
-            List<string> errors = new();
-
-            for (int index = 0; index < group.Items.Count; index++)
-            {
-                if (!group.Items[index].TryGetRawWord(out rawWords[index]))
+            return ExecutePageOperationAsync(
+                async () =>
                 {
-                    errors.Add($"{group.Items[index].Definition.DocumentAddress}：{group.Items[index].ValidationMessage}");
+                    TransactionExecutionResult result = await ReadRangeCoreAsync(
+                        0x0000,
+                        36).ConfigureAwait(true);
+                    StatusMessage = result.Message;
+                });
+        }
+
+        /// <summary>
+        /// 手动读取全部选中项的最小至最大地址跨度。
+        /// </summary>
+        /// <returns>选择校验或标准 0x03 事务完成后的任务。</returns>
+        private Task ReadSelectedAsync()
+        {
+            return ExecutePageOperationAsync(
+                async () =>
+                {
+                    ParameterItemViewModel[] selected = GetSelectedItems();
+
+                    if (selected.Length == 0)
+                    {
+                        StatusMessage = "请先勾选至少一个需要读取的寄存器。";
+                        return;
+                    }
+
+                    ushort startAddress = selected[0].Definition.ProtocolAddress;
+                    ushort endAddress = selected[^1].Definition.ProtocolAddress;
+                    ushort quantity = checked((ushort)(endAddress - startAddress + 1));
+                    TransactionExecutionResult result = await ReadRangeCoreAsync(
+                        startAddress,
+                        quantity).ConfigureAwait(true);
+                    StatusMessage = result.Message;
+                });
+        }
+
+        /// <summary>
+        /// 手动读取指定单个寄存器。
+        /// </summary>
+        /// <param name="item">需要读取的统一寄存器表行。</param>
+        /// <returns>标准 0x03 单寄存器事务完成后的任务。</returns>
+        private Task ReadItemAsync(ParameterItemViewModel? item)
+        {
+            return ExecutePageOperationAsync(
+                async () =>
+                {
+                    if (item is null)
+                    {
+                        StatusMessage = "未指定需要读取的寄存器。";
+                        return;
+                    }
+
+                    TransactionExecutionResult result = await ReadRangeCoreAsync(
+                        item.Definition.ProtocolAddress,
+                        1).ConfigureAwait(true);
+                    StatusMessage = result.Message;
+                });
+        }
+
+        /// <summary>
+        /// 使用 0x06 修改指定单个普通可写寄存器。
+        /// </summary>
+        /// <param name="item">需要修改且已经填写输入的参数行。</param>
+        /// <returns>输入校验或标准 0x06 事务完成后的任务。</returns>
+        private Task ModifyItemAsync(ParameterItemViewModel? item)
+        {
+            return ExecutePageOperationAsync(
+                async () =>
+                {
+                    if (item is null || !item.IsOrdinaryWritable)
+                    {
+                        StatusMessage = "该寄存器为只读项或必须使用专用安全流程。";
+                        return;
+                    }
+
+                    if (!item.TryGetRawWord(out ushort rawWord))
+                    {
+                        StatusMessage =
+                            $"{item.Definition.DocumentAddress}：{item.ValidationMessage}";
+                        return;
+                    }
+
+                    TransactionExecutionResult result = await WriteSingleCoreAsync(
+                        item,
+                        rawWord).ConfigureAwait(true);
+                    StatusMessage = result.Message;
+                });
+        }
+
+        /// <summary>
+        /// 根据选中数量执行一项 0x06、连续 0x10 或非连续回读合并 0x10。
+        /// </summary>
+        /// <returns>预校验、回读或最终写事务完成后的任务。</returns>
+        private Task ModifySelectedAsync()
+        {
+            return ExecutePageOperationAsync(ModifySelectedCoreAsync);
+        }
+
+        /// <summary>
+        /// 完整校验选中项并执行对应单项或批量写入策略。
+        /// </summary>
+        /// <returns>校验失败或写入事务完成后的任务。</returns>
+        private async Task ModifySelectedCoreAsync()
+        {
+            ParameterItemViewModel[] selected = GetSelectedItems();
+
+            if (selected.Length == 0)
+            {
+                StatusMessage = "请先勾选并填写至少一个需要修改的普通参数。";
+                return;
+            }
+
+            if (selected.Any(item => !item.IsOrdinaryWritable))
+            {
+                StatusMessage = "批量修改只能包含 40011～40023 或 40030～40035 的普通可写参数。";
+                return;
+            }
+
+            bool usesAlarmGroup = selected[0].Definition.DocumentAddress <= 40023;
+
+            if (selected.Any(
+                item => (item.Definition.DocumentAddress <= 40023) != usesAlarmGroup))
+            {
+                StatusMessage = "一次批量修改不能跨越报警参数组和补偿参数组。";
+                return;
+            }
+
+            Dictionary<ushort, ushort> editedWords = [];
+            List<string> errors = [];
+
+            foreach (ParameterItemViewModel item in selected)
+            {
+                if (item.TryGetRawWord(out ushort rawWord))
+                {
+                    editedWords.Add(item.Definition.ProtocolAddress, rawWord);
+                }
+                else
+                {
+                    errors.Add(
+                        $"{item.Definition.DocumentAddress}：{item.ValidationMessage}");
                 }
             }
 
             if (errors.Count > 0)
             {
-                StatusMessage = $"整组预校验失败，未写入任何数据：{string.Join("；", errors)}";
+                StatusMessage =
+                    $"参数预校验失败，未写入任何数据：{string.Join("；", errors)}";
                 return;
             }
 
-            ModbusRequest request = ModbusRequestFactory.CreateWriteMultipleRegisters(
+            if (selected.Length == 1)
+            {
+                TransactionExecutionResult singleResult = await WriteSingleCoreAsync(
+                    selected[0],
+                    editedWords[selected[0].Definition.ProtocolAddress])
+                    .ConfigureAwait(true);
+                StatusMessage = singleResult.Message;
+                return;
+            }
+
+            ushort startAddress = selected[0].Definition.ProtocolAddress;
+            ushort endAddress = selected[^1].Definition.ProtocolAddress;
+            int spanLength = endAddress - startAddress + 1;
+
+            if (spanLength == selected.Length)
+            {
+                ushort[] contiguousWords = Enumerable
+                    .Range(startAddress, spanLength)
+                    .Select(address => editedWords[checked((ushort)address)])
+                    .ToArray();
+                TransactionExecutionResult writeResult = await WriteMultipleCoreAsync(
+                    startAddress,
+                    contiguousWords).ConfigureAwait(true);
+
+                if (IsSuccessful(writeResult))
+                {
+                    ApplySuccessfulWriteValues(editedWords);
+                }
+
+                StatusMessage = writeResult.Message;
+                return;
+            }
+
+            await ExecuteNonContiguousWriteAsync(
+                startAddress,
+                endAddress,
+                editedWords).ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// 在独占序列中回读非连续选择跨度、合并未修改原值并发送一帧 0x10。
+        /// </summary>
+        /// <param name="startAddress">选中项最小零基协议地址。</param>
+        /// <param name="endAddress">选中项最大零基协议地址。</param>
+        /// <param name="editedWords">用户明确修改的协议地址和原始字。</param>
+        /// <returns>租约拒绝、回读失败或最终写入完成后的任务。</returns>
+        private async Task ExecuteNonContiguousWriteAsync(
+            ushort startAddress,
+            ushort endAddress,
+            IReadOnlyDictionary<ushort, ushort> editedWords)
+        {
+            ModbusOperationSequence? sequence = operationService.TryBeginSequence();
+
+            if (sequence is null)
+            {
+                StatusMessage = "当前已有请求等待处理，无法开始回读后写入。";
+                return;
+            }
+
+            await using (sequence)
+            {
+                ushort quantity = checked((ushort)(endAddress - startAddress + 1));
+                ModbusRequest readRequest =
+                    ModbusRequestFactory.CreateReadHoldingRegisters(
+                        CurrentSlaveAddress,
+                        startAddress,
+                        quantity);
+                TransactionExecutionResult readResult = await sequence.ExecuteAsync(
+                    commandConsole.CreateStandardTransaction(readRequest),
+                    CancellationToken.None).ConfigureAwait(true);
+
+                if (!IsSuccessful(readResult))
+                {
+                    StatusMessage = $"批量修改前回读失败，未发送写帧：{readResult.Message}";
+                    return;
+                }
+
+                IReadOnlyDictionary<ushort, RegisterValue> snapshot =
+                    operationService.DeviceSnapshot.Values;
+                ushort[] mergedWords = new ushort[quantity];
+
+                for (int offset = 0; offset < quantity; offset++)
+                {
+                    ushort address = checked((ushort)(startAddress + offset));
+
+                    if (editedWords.TryGetValue(address, out ushort editedWord))
+                    {
+                        mergedWords[offset] = editedWord;
+                    }
+                    else if (snapshot.TryGetValue(address, out RegisterValue? currentValue))
+                    {
+                        mergedWords[offset] = currentValue.RawWord;
+                    }
+                    else
+                    {
+                        StatusMessage =
+                            $"回读后缺少协议地址 0x{address:X4} 的原始值，未发送写帧。";
+                        return;
+                    }
+                }
+
+                ModbusRequest writeRequest =
+                    ModbusRequestFactory.CreateWriteMultipleRegisters(
+                        CurrentSlaveAddress,
+                        startAddress,
+                        mergedWords);
+                TransactionExecutionResult writeResult = await sequence.ExecuteAsync(
+                    commandConsole.CreateStandardTransaction(writeRequest),
+                    CancellationToken.None).ConfigureAwait(true);
+
+                if (IsSuccessful(writeResult))
+                {
+                    ApplySuccessfulWriteValues(editedWords);
+                }
+
+                StatusMessage = writeResult.Message;
+            }
+        }
+
+        /// <summary>
+        /// 使用当前从站地址执行一项连续 0x03 读取。
+        /// </summary>
+        /// <param name="startAddress">零基协议起始地址。</param>
+        /// <param name="quantity">需要读取的连续寄存器数量。</param>
+        /// <returns>标准事务唯一终态或立即拒绝结果。</returns>
+        private ValueTask<TransactionExecutionResult> ReadRangeCoreAsync(
+            ushort startAddress,
+            ushort quantity)
+        {
+            ModbusRequest request = ModbusRequestFactory.CreateReadHoldingRegisters(
                 CurrentSlaveAddress,
-                group.StartAddress,
-                rawWords);
+                startAddress,
+                quantity);
+            return commandConsole.ExecuteStandardAsync(
+                request,
+                CancellationToken.None);
+        }
+
+        /// <summary>
+        /// 使用当前从站地址执行一项 0x06 普通参数写入。
+        /// </summary>
+        /// <param name="item">需要修改的普通参数行。</param>
+        /// <param name="rawWord">已经由该行寄存器定义验证的原始字。</param>
+        /// <returns>标准事务唯一终态或立即拒绝结果。</returns>
+        private async ValueTask<TransactionExecutionResult> WriteSingleCoreAsync(
+            ParameterItemViewModel item,
+            ushort rawWord)
+        {
+            ModbusRequest request = ModbusRequestFactory.CreateWriteSingleRegister(
+                CurrentSlaveAddress,
+                item.Definition.ProtocolAddress,
+                rawWord);
             TransactionExecutionResult result = await commandConsole.ExecuteStandardAsync(
                 request,
                 CancellationToken.None).ConfigureAwait(true);
-            StatusMessage = result.Message;
+
+            if (IsSuccessful(result))
+            {
+                item.ApplySnapshotValue(
+                    RegisterValueConverter.Decode(item.Definition, rawWord));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 使用当前从站地址执行一项 0x10 连续普通参数写入。
+        /// </summary>
+        /// <param name="startAddress">零基协议起始地址。</param>
+        /// <param name="rawWords">按地址升序排列的非空原始字。</param>
+        /// <returns>标准事务唯一终态或立即拒绝结果。</returns>
+        private ValueTask<TransactionExecutionResult> WriteMultipleCoreAsync(
+            ushort startAddress,
+            ushort[] rawWords)
+        {
+            ModbusRequest request = ModbusRequestFactory.CreateWriteMultipleRegisters(
+                CurrentSlaveAddress,
+                startAddress,
+                rawWords);
+            return commandConsole.ExecuteStandardAsync(
+                request,
+                CancellationToken.None);
         }
 
         /// <summary>
@@ -318,16 +666,53 @@ namespace CH32UpperComputer.App.ViewModels
                 if (result.Status == ConfigurationChangeStatus.Succeeded)
                 {
                     serialConnection.SlaveAddress = result.LocalConfiguration.SlaveAddress;
-                    serialConnection.BaudRate = result.LocalConfiguration.SerialSettings.BaudRate;
+                    serialConnection.BaudRate =
+                        result.LocalConfiguration.SerialSettings.BaudRate;
                     TargetSlaveAddress = result.LocalConfiguration.SlaveAddress;
-                    TargetBaudRate = result.LocalConfiguration.SerialSettings.BaudRate;
+                    TargetBaudRate =
+                        result.LocalConfiguration.SerialSettings.BaudRate;
 
-                    if (result.Kind is ConfigurationChangeKind.BaudRate or ConfigurationChangeKind.FactoryReset)
+                    if (result.Kind is ConfigurationChangeKind.BaudRate or
+                        ConfigurationChangeKind.FactoryReset)
                     {
                         serialConnection.IsConnected = true;
-                        serialConnection.ConnectionStatus = "已连接 · 等待手动指令";
+                        serialConnection.ConnectionStatus =
+                            "已连接 · 等待手动指令";
                     }
                 }
+            }
+            catch (Exception exception)
+            {
+                StatusMessage = exception.Message;
+            }
+            finally
+            {
+                isLocalOperationBusy = false;
+                NotifyCommandStates();
+            }
+        }
+
+        /// <summary>
+        /// 使用页面级即时忙门执行一项普通读取或写入，防止快速重复点击。
+        /// </summary>
+        /// <param name="operation">完整校验、发送和状态更新操作。</param>
+        /// <returns>操作完成并释放页面忙门后的任务。</returns>
+        private async Task ExecutePageOperationAsync(Func<Task> operation)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+
+            if (isLocalOperationBusy)
+            {
+                StatusMessage = "当前已有参数操作等待处理。";
+                return;
+            }
+
+            isLocalOperationBusy = true;
+            NotifyCommandStates();
+
+            try
+            {
+                await operation().ConfigureAwait(true);
             }
             catch (Exception exception)
             {
@@ -351,15 +736,18 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 使用当前设备快照刷新参数页已读取值，不改变无快照参数的用户输入。
+        /// 使用当前设备快照刷新统一寄存器表，不改变没有快照项的用户输入。
         /// </summary>
         private void RefreshFromSnapshot()
         {
-            IReadOnlyDictionary<ushort, RegisterValue> values = operationService.DeviceSnapshot.Values;
+            IReadOnlyDictionary<ushort, RegisterValue> values =
+                operationService.DeviceSnapshot.Values;
 
-            foreach (ParameterItemViewModel item in ParameterGroups.SelectMany(group => group.Items))
+            foreach (ParameterItemViewModel item in Registers)
             {
-                if (values.TryGetValue(item.Definition.ProtocolAddress, out RegisterValue? value))
+                if (values.TryGetValue(
+                    item.Definition.ProtocolAddress,
+                    out RegisterValue? value))
                 {
                     item.ApplySnapshotValue(value);
                 }
@@ -367,24 +755,45 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 创建报警阈值/回差/使能和补偿两个连续普通写组。
+        /// 将成功写入的用户编辑值应用到当前表格显示，不伪造未确认的快照范围。
         /// </summary>
-        /// <returns>不包含地址、波特率或恢复出厂的固定参数组数组。</returns>
-        private static ParameterGroupViewModel[] CreateParameterGroups()
+        /// <param name="editedWords">已经被成功响应确认的协议地址和原始字。</param>
+        private void ApplySuccessfulWriteValues(
+            IReadOnlyDictionary<ushort, ushort> editedWords)
         {
-            ParameterItemViewModel[] alarmItems = DeviceRegisterMap.All
-                .Where(definition => definition.DocumentAddress is >= 40011 and <= 40023)
-                .Select(definition => new ParameterItemViewModel(definition))
+            foreach (ParameterItemViewModel item in Registers)
+            {
+                if (editedWords.TryGetValue(
+                    item.Definition.ProtocolAddress,
+                    out ushort rawWord))
+                {
+                    item.ApplySnapshotValue(
+                        RegisterValueConverter.Decode(item.Definition, rawWord));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 获取当前按协议地址升序排列的选中寄存器行。
+        /// </summary>
+        /// <returns>新的选中项数组；没有选择时为空。</returns>
+        private ParameterItemViewModel[] GetSelectedItems()
+        {
+            return Registers
+                .Where(item => item.IsSelected)
+                .OrderBy(item => item.Definition.ProtocolAddress)
                 .ToArray();
-            ParameterItemViewModel[] compensationItems = DeviceRegisterMap.All
-                .Where(definition => definition.DocumentAddress is >= 40030 and <= 40035)
-                .Select(definition => new ParameterItemViewModel(definition))
-                .ToArray();
-            return
-            [
-                new ParameterGroupViewModel("报警阈值、回差与使能", alarmItems),
-                new ParameterGroupViewModel("传感器补偿", compensationItems),
-            ];
+        }
+
+        /// <summary>
+        /// 判断事务是否被接受并以严格成功标准响应结束。
+        /// </summary>
+        /// <param name="result">协调器返回的提交结果。</param>
+        /// <returns>存在成功终态时返回真。</returns>
+        private static bool IsSuccessful(TransactionExecutionResult result)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+            return result.Outcome?.State == TransactionCompletionState.Succeeded;
         }
 
         /// <summary>
@@ -396,7 +805,8 @@ namespace CH32UpperComputer.App.ViewModels
             {
                 if (serialConnection.SlaveAddress is < 1 or > 64)
                 {
-                    throw new InvalidOperationException("普通 Modbus 从站地址必须位于 1 至 64。");
+                    throw new InvalidOperationException(
+                        "普通 Modbus 从站地址必须位于 1 至 64。");
                 }
 
                 return checked((byte)serialConnection.SlaveAddress);
@@ -406,21 +816,80 @@ namespace CH32UpperComputer.App.ViewModels
         /// <summary>
         /// 获取是否允许执行普通读取或写入。
         /// </summary>
-        /// <returns>已连接且共享事务门和本页专用门均空闲时返回真。</returns>
+        /// <returns>已连接且共享事务门和本页操作门均空闲时返回真。</returns>
         private bool CanExecuteStandardOperation()
         {
             return serialConnection.IsConnected &&
+                !applicationOperationGate.IsIapActive &&
                 !serialConnection.IsTransactionBusy &&
                 !isLocalOperationBusy;
         }
 
         /// <summary>
-        /// 获取是否允许对当前选择的连续参数组执行操作。
+        /// 获取是否存在至少一个选中项且允许执行批量读取。
         /// </summary>
-        /// <returns>已选择参数组且普通操作可执行时返回真。</returns>
-        private bool CanExecuteSelectedGroupOperation()
+        /// <returns>存在任意选中项且普通操作可执行时返回真。</returns>
+        private bool CanExecuteReadSelected()
         {
-            return SelectedGroup is not null && CanExecuteStandardOperation();
+            return Registers.Any(item => item.IsSelected) &&
+                CanExecuteStandardOperation();
+        }
+
+        /// <summary>
+        /// 获取当前选择是否允许执行普通寄存器修改。
+        /// </summary>
+        /// <returns>所有选中项属于同一普通可写组且普通操作可执行时返回真。</returns>
+        private bool CanExecuteModifySelected()
+        {
+            ParameterItemViewModel[] selected = GetSelectedItems();
+            return IsValidWritableSelection(selected) &&
+                CanExecuteStandardOperation();
+        }
+
+        /// <summary>
+        /// 判断一组选中项是否全部属于同一个普通可写寄存器组。
+        /// </summary>
+        /// <param name="selected">按协议地址升序排列的选中寄存器行。</param>
+        /// <returns>选择非空、全部普通可写且没有跨组时返回真。</returns>
+        private static bool IsValidWritableSelection(
+            IReadOnlyList<ParameterItemViewModel> selected)
+        {
+            ArgumentNullException.ThrowIfNull(selected);
+
+            if (selected.Count == 0 ||
+                selected.Any(item => !item.IsOrdinaryWritable))
+            {
+                return false;
+            }
+
+            bool usesAlarmGroup =
+                selected[0].Definition.DocumentAddress <= 40023;
+            return selected.All(
+                item =>
+                    (item.Definition.DocumentAddress <= 40023) ==
+                    usesAlarmGroup);
+        }
+
+        /// <summary>
+        /// 获取是否允许读取指定单个寄存器。
+        /// </summary>
+        /// <param name="item">命令参数中的统一寄存器表行。</param>
+        /// <returns>行存在且普通操作可执行时返回真。</returns>
+        private bool CanReadItem(ParameterItemViewModel? item)
+        {
+            return item is not null && CanExecuteStandardOperation();
+        }
+
+        /// <summary>
+        /// 获取是否允许修改指定单个普通参数。
+        /// </summary>
+        /// <param name="item">命令参数中的统一寄存器表行。</param>
+        /// <returns>行属于普通可写组且普通操作可执行时返回真。</returns>
+        private bool CanModifyItem(ParameterItemViewModel? item)
+        {
+            return item is not null &&
+                item.IsOrdinaryWritable &&
+                CanExecuteStandardOperation();
         }
 
         /// <summary>
@@ -443,11 +912,93 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
+        /// 点击寄存器名称时清除旧选择并仅选中当前行。
+        /// </summary>
+        /// <param name="item">用户点击名称的统一寄存器表行。</param>
+        private void SelectItem(ParameterItemViewModel? item)
+        {
+            if (item is null)
+            {
+                return;
+            }
+
+            isSynchronizingSelection = true;
+
+            try
+            {
+                foreach (ParameterItemViewModel register in Registers)
+                {
+                    register.IsSelected = ReferenceEquals(register, item);
+                }
+            }
+            finally
+            {
+                isSynchronizingSelection = false;
+            }
+
+            UpdateSelectionSummary();
+            NotifyCommandStates();
+        }
+
+        /// <summary>
+        /// 根据当前真实勾选项刷新数量和修改资格说明。
+        /// </summary>
+        private void UpdateSelectionSummary()
+        {
+            ParameterItemViewModel[] selected = GetSelectedItems();
+
+            if (selected.Length == 0)
+            {
+                SelectionSummary =
+                    "未选择寄存器；勾选后可读取，普通可写项可修改。";
+                return;
+            }
+
+            if (selected.Any(item => !item.IsOrdinaryWritable))
+            {
+                SelectionSummary =
+                    $"已选择 {selected.Length} 项 · 可读取；包含只读或专用项，不能修改。";
+                return;
+            }
+
+            if (!IsValidWritableSelection(selected))
+            {
+                SelectionSummary =
+                    $"已选择 {selected.Length} 项 · 可读取；修改不能跨报警参数组与补偿参数组。";
+                return;
+            }
+
+            SelectionSummary =
+                $"已选择 {selected.Length} 项 · 可读取、可修改。";
+        }
+
+        /// <summary>
         /// 接收快照更新并在界面线程刷新参数当前值。
         /// </summary>
         private void HandleSnapshotUpdated()
         {
             dispatcher.Post(RefreshFromSnapshot);
+        }
+
+        /// <summary>
+        /// 接收寄存器选择变化并刷新批量读取和修改命令。
+        /// </summary>
+        /// <param name="sender">发生属性变化的统一寄存器表行。</param>
+        /// <param name="eventArgs">发生变化的属性名称。</param>
+        private void HandleRegisterItemPropertyChanged(
+            object? sender,
+            PropertyChangedEventArgs eventArgs)
+        {
+            if (eventArgs.PropertyName == nameof(ParameterItemViewModel.IsSelected))
+            {
+                if (isSynchronizingSelection)
+                {
+                    return;
+                }
+
+                UpdateSelectionSummary();
+                NotifyCommandStates();
+            }
         }
 
         /// <summary>
@@ -467,26 +1018,37 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
+        /// 在 IAP 取得或释放应用操作门后刷新参数命令和暂停提示。
+        /// </summary>
+        /// <param name="isActive">固件升级是否正在独占通信操作。</param>
+        private void HandleIapActivityChanged(bool isActive)
+        {
+            dispatcher.Post(
+                () =>
+                {
+                    if (isActive)
+                    {
+                        StatusMessage = "固件升级期间参数读取、修改和专用流程已暂停。";
+                    }
+
+                    NotifyCommandStates();
+                });
+        }
+
+        /// <summary>
         /// 通知参数页全部命令重新计算可执行性。
         /// </summary>
         private void NotifyCommandStates()
         {
             ReadAllCommand.NotifyCanExecuteChanged();
-            ReadSelectedGroupCommand.NotifyCanExecuteChanged();
-            SaveSelectedGroupCommand.NotifyCanExecuteChanged();
+            ReadSelectedCommand.NotifyCanExecuteChanged();
+            ModifySelectedCommand.NotifyCanExecuteChanged();
+            ReadItemCommand.NotifyCanExecuteChanged();
+            ModifyItemCommand.NotifyCanExecuteChanged();
             ChangeAddressCommand.NotifyCanExecuteChanged();
             ChangeBaudRateCommand.NotifyCanExecuteChanged();
             RestoreFactoryCommand.NotifyCanExecuteChanged();
             DiscoverAddressCommand.NotifyCanExecuteChanged();
-        }
-
-        /// <summary>
-        /// 在参数组选择变化后刷新组操作命令。
-        /// </summary>
-        /// <param name="value">新选择的连续参数组。</param>
-        partial void OnSelectedGroupChanged(ParameterGroupViewModel? value)
-        {
-            NotifyCommandStates();
         }
 
         /// <summary>

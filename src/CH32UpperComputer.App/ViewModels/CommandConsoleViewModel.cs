@@ -1,5 +1,6 @@
 ﻿using CH32UpperComputer.App.Services;
 using CH32UpperComputer.Core.Protocol;
+using CH32UpperComputer.Infrastructure.Coordination;
 using CH32UpperComputer.Infrastructure.Settings;
 using CH32UpperComputer.Infrastructure.Transactions;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -33,6 +34,11 @@ namespace CH32UpperComputer.App.ViewModels
         /// 将后台事务和定时事件切换到 WPF 界面线程。
         /// </summary>
         private readonly IUiDispatcher dispatcher;
+
+        /// <summary>
+        /// 在 IAP 活动期间禁用所有 Modbus 发送入口。
+        /// </summary>
+        private readonly IApplicationOperationGate applicationOperationGate;
 
         /// <summary>
         /// 指示 ViewModel 已释放并取消后台事件订阅。
@@ -113,12 +119,16 @@ namespace CH32UpperComputer.App.ViewModels
         /// <param name="serialConnection">提供当前串口参数、地址和连接状态的 ViewModel。</param>
         /// <param name="dispatcher">负责把后台事件投递到界面线程的调度器。</param>
         /// <param name="settings">提供 CRC 偏好、上次输入和定时间隔的安全设置。</param>
+        /// <param name="applicationOperationGate">
+        /// 可选应用级通信门；为空时创建独立门保持旧构造兼容。
+        /// </param>
         public CommandConsoleViewModel(
             ModbusOperationService operationService,
             PeriodicSendService periodicSendService,
             SerialConnectionViewModel serialConnection,
             IUiDispatcher dispatcher,
-            AppSettings settings)
+            AppSettings settings,
+            IApplicationOperationGate? applicationOperationGate = null)
         {
             ArgumentNullException.ThrowIfNull(operationService);
             ArgumentNullException.ThrowIfNull(periodicSendService);
@@ -129,6 +139,8 @@ namespace CH32UpperComputer.App.ViewModels
             this.periodicSendService = periodicSendService;
             this.serialConnection = serialConnection;
             this.dispatcher = dispatcher;
+            this.applicationOperationGate =
+                applicationOperationGate ?? new ApplicationOperationGate();
             AppSettings safeSettings = settings.CreateValidatedCopy();
             autoAppendCrc = safeSettings.AutoAppendCrc;
             periodicIntervalMilliseconds = safeSettings.PeriodicIntervalMilliseconds;
@@ -144,6 +156,8 @@ namespace CH32UpperComputer.App.ViewModels
             periodicSendService.RunningChanged += HandlePeriodicRunningChanged;
             periodicSendService.AttemptCompleted += HandlePeriodicAttemptCompleted;
             serialConnection.PropertyChanged += HandleSerialConnectionPropertyChanged;
+            this.applicationOperationGate.IapActivityChanged +=
+                HandleIapActivityChanged;
         }
 
         /// <summary>
@@ -181,7 +195,7 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 执行参数页或专家工具已经构建的标准请求，并复用同一日志、统计和快照路径。
+        /// 执行参数页已经构建的标准请求，并复用同一日志、统计和快照路径。
         /// </summary>
         /// <param name="request">由统一工厂构建的严格标准请求。</param>
         /// <param name="cancellationToken">取消当前被接受事务的令牌。</param>
@@ -193,44 +207,6 @@ namespace CH32UpperComputer.App.ViewModels
             return operationService.ExecuteAsync(
                 CreateStandardTransaction(request),
                 cancellationToken);
-        }
-
-        /// <summary>
-        /// 把专家工具文本强制作为 RawDebug 事务发送，即使它恰好可被识别为标准请求也不触发自动配置切换。
-        /// </summary>
-        /// <param name="text">待解析的十六进制帧文本。</param>
-        /// <param name="cancellationToken">取消当前被接受原始事务的令牌。</param>
-        /// <returns>输入失败时抛出格式异常；成功时返回 Busy 等拒绝或唯一原始事务终态。</returns>
-        public ValueTask<TransactionExecutionResult> ExecuteRawTextAsync(
-            string text,
-            CancellationToken cancellationToken)
-        {
-            HexFrameParseResult parseResult = HexFrameParser.TryParse(
-                text,
-                TransactionRequest.MaximumRequestFrameBytes);
-
-            if (!parseResult.IsSuccess)
-            {
-                throw new FormatException(parseResult.ErrorMessage);
-            }
-
-            byte[] frame = parseResult.Bytes.ToArray();
-
-            if (AutoAppendCrc && !parseResult.HasValidTrailingCrc)
-            {
-                if (frame.Length > TransactionRequest.MaximumRequestFrameBytes - 2)
-                {
-                    throw new FormatException("自动补充 CRC 后发送帧不能超过 256 字节。");
-                }
-
-                frame = ModbusCrc16.Append(frame);
-            }
-
-            TransactionRequest request = TransactionRequest.CreateRawDebug(
-                frame,
-                TimeSpan.FromMilliseconds(serialConnection.ResponseTimeoutMilliseconds),
-                TimeSpan.FromMilliseconds(serialConnection.RawInterByteTimeoutMilliseconds));
-            return operationService.ExecuteAsync(request, cancellationToken);
         }
 
         /// <summary>
@@ -249,6 +225,8 @@ namespace CH32UpperComputer.App.ViewModels
             periodicSendService.RunningChanged -= HandlePeriodicRunningChanged;
             periodicSendService.AttemptCompleted -= HandlePeriodicAttemptCompleted;
             serialConnection.PropertyChanged -= HandleSerialConnectionPropertyChanged;
+            applicationOperationGate.IapActivityChanged -=
+                HandleIapActivityChanged;
         }
 
         /// <summary>
@@ -403,7 +381,7 @@ namespace CH32UpperComputer.App.ViewModels
                     CanSendCommonCommand),
                 new CommonCommandItemViewModel(
                     "未知地址查询",
-                    "仅限总线上一个设备",
+                    SpecialConfigurationService.UnknownAddressRiskWarning,
                     () => SendCommonCommandAsync(ModbusRequestFactory.CreateUnknownAddressQuery),
                     CanSendCommonCommand),
             ];
@@ -470,6 +448,7 @@ namespace CH32UpperComputer.App.ViewModels
         private bool CanSendCommonCommand()
         {
             return serialConnection.IsConnected &&
+                !applicationOperationGate.IsIapActive &&
                 !serialConnection.IsTransactionBusy;
         }
 
@@ -490,6 +469,7 @@ namespace CH32UpperComputer.App.ViewModels
         private bool CanSend()
         {
             return serialConnection.IsConnected &&
+                !applicationOperationGate.IsIapActive &&
                 !serialConnection.IsTransactionBusy &&
                 !string.IsNullOrWhiteSpace(InputText);
         }
@@ -501,6 +481,7 @@ namespace CH32UpperComputer.App.ViewModels
         private bool CanStartPeriodic()
         {
             return serialConnection.IsConnected &&
+                !applicationOperationGate.IsIapActive &&
                 !serialConnection.IsTransactionBusy &&
                 !IsPeriodicRunning &&
                 PeriodicIntervalMilliseconds is >= 100 and <= 3_600_000 &&
@@ -595,6 +576,24 @@ namespace CH32UpperComputer.App.ViewModels
             {
                 NotifyCommandStates();
             }
+        }
+
+        /// <summary>
+        /// 在固件升级取得或释放应用门后刷新全部发送按钮和提示。
+        /// </summary>
+        /// <param name="isActive">固件升级是否正在独占通信操作。</param>
+        private void HandleIapActivityChanged(bool isActive)
+        {
+            dispatcher.Post(
+                () =>
+                {
+                    if (isActive)
+                    {
+                        StatusMessage = "固件升级期间 Modbus 操作已暂停。";
+                    }
+
+                    NotifyCommandStates();
+                });
         }
 
         /// <summary>

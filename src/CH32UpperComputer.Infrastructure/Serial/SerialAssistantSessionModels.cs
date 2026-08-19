@@ -1,4 +1,4 @@
-namespace CH32UpperComputer.Infrastructure.Serial
+﻿namespace CH32UpperComputer.Infrastructure.Serial
 {
     /// <summary>
     /// 指定普通串口助手会话的连接生命周期状态。
@@ -221,6 +221,198 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// 获取创建快照时缓存的单调递增修订号。
         /// </summary>
         public long CacheRevision { get; }
+    }
+
+    /// <summary>
+    /// 指定统一串口画布中一项原始数据来自接收线路还是成功发送。
+    /// </summary>
+    public enum SerialAssistantTrafficDirection
+    {
+        /// <summary>
+        /// 数据由串口驱动接收并进入助手缓存。
+        /// </summary>
+        Receive = 0,
+
+        /// <summary>
+        /// 数据已经成功写入串口线路。
+        /// </summary>
+        Transmit = 1,
+    }
+
+    /// <summary>
+    /// 表示统一串口画布中的一项不可变 TX 或 RX 原始数据记录。
+    /// </summary>
+    public sealed class SerialAssistantTrafficBatch
+    {
+        /// <summary>
+        /// 当前记录独占持有的原始线路字节。
+        /// </summary>
+        private readonly byte[] data;
+
+        /// <summary>
+        /// 初始化一项拥有独立原始字节副本的收发记录。
+        /// </summary>
+        /// <param name="direction">本项数据是成功发送还是线路接收。</param>
+        /// <param name="data">本项非空原始线路字节。</param>
+        /// <param name="recordedAtUtc">发送完成或接收批次首字节到达的 UTC 时刻。</param>
+        /// <param name="portGeneration">产生本项数据的串口会话代次。</param>
+        public SerialAssistantTrafficBatch(
+            SerialAssistantTrafficDirection direction,
+            ReadOnlySpan<byte> data,
+            DateTimeOffset recordedAtUtc,
+            int portGeneration)
+        {
+            if (!Enum.IsDefined(direction))
+            {
+                throw new ArgumentOutOfRangeException(nameof(direction));
+            }
+
+            if (data.IsEmpty)
+            {
+                throw new ArgumentException("串口助手收发记录不能为空。", nameof(data));
+            }
+
+            if (portGeneration < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(portGeneration));
+            }
+
+            Direction = direction;
+            this.data = data.ToArray();
+            RecordedAtUtc = recordedAtUtc.ToUniversalTime();
+            PortGeneration = portGeneration;
+        }
+
+        /// <summary>
+        /// 获取本项数据的 TX 或 RX 方向。
+        /// </summary>
+        public SerialAssistantTrafficDirection Direction { get; }
+
+        /// <summary>
+        /// 获取原始线路字节的防御性副本。
+        /// </summary>
+        public ReadOnlyMemory<byte> Data => (byte[])data.Clone();
+
+        /// <summary>
+        /// 获取发送完成或接收批次首字节到达的 UTC 时刻。
+        /// </summary>
+        public DateTimeOffset RecordedAtUtc { get; }
+
+        /// <summary>
+        /// 获取产生本项数据的串口会话代次。
+        /// </summary>
+        public int PortGeneration { get; }
+
+        /// <summary>
+        /// 获取记录原始字节数，供有界缓存计算占用且不复制数组。
+        /// </summary>
+        internal int ByteCount => data.Length;
+    }
+
+    /// <summary>
+    /// 表示统一收发缓存写入后供串口画布增量刷新的一次通知。
+    /// </summary>
+    public sealed class SerialAssistantTrafficUpdate
+    {
+        /// <summary>
+        /// 初始化一次统一收发缓存更新通知。
+        /// </summary>
+        /// <param name="batch">刚写入有界缓存的新 TX 或 RX 记录。</param>
+        /// <param name="requiresFullRefresh">本次写入是否淘汰旧记录并要求完整重绘。</param>
+        /// <param name="clearVersion">本项记录所属的最近一次清空代次。</param>
+        /// <param name="trafficRevision">本次写入后的统一收发缓存修订号。</param>
+        public SerialAssistantTrafficUpdate(
+            SerialAssistantTrafficBatch batch,
+            bool requiresFullRefresh,
+            long clearVersion,
+            long trafficRevision)
+        {
+            ArgumentNullException.ThrowIfNull(batch);
+
+            if (clearVersion < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(clearVersion));
+            }
+
+            if (trafficRevision < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(trafficRevision));
+            }
+
+            Batch = batch;
+            RequiresFullRefresh = requiresFullRefresh;
+            ClearVersion = clearVersion;
+            TrafficRevision = trafficRevision;
+        }
+
+        /// <summary>
+        /// 获取刚写入缓存的新 TX 或 RX 记录。
+        /// </summary>
+        public SerialAssistantTrafficBatch Batch { get; }
+
+        /// <summary>
+        /// 获取是否必须从统一缓存快照完整重绘画布。
+        /// </summary>
+        public bool RequiresFullRefresh { get; }
+
+        /// <summary>
+        /// 获取本项记录所属的最近一次清空代次。
+        /// </summary>
+        public long ClearVersion { get; }
+
+        /// <summary>
+        /// 获取本次写入后的统一收发缓存修订号。
+        /// </summary>
+        public long TrafficRevision { get; }
+    }
+
+    /// <summary>
+    /// 表示统一串口画布所需的 TX/RX 缓存及排序版本原子快照。
+    /// </summary>
+    public sealed class SerialAssistantTrafficSnapshot
+    {
+        /// <summary>
+        /// 初始化一项不可变统一收发缓存快照。
+        /// </summary>
+        /// <param name="batches">按实际收发发生顺序排列的独立记录。</param>
+        /// <param name="clearVersion">创建快照时最近一次清空代次。</param>
+        /// <param name="trafficRevision">创建快照时统一收发缓存修订号。</param>
+        public SerialAssistantTrafficSnapshot(
+            IReadOnlyList<SerialAssistantTrafficBatch> batches,
+            long clearVersion,
+            long trafficRevision)
+        {
+            ArgumentNullException.ThrowIfNull(batches);
+
+            if (clearVersion < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(clearVersion));
+            }
+
+            if (trafficRevision < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(trafficRevision));
+            }
+
+            Batches = batches;
+            ClearVersion = clearVersion;
+            TrafficRevision = trafficRevision;
+        }
+
+        /// <summary>
+        /// 获取按实际发生顺序排列且不共享可变数组的 TX/RX 记录。
+        /// </summary>
+        public IReadOnlyList<SerialAssistantTrafficBatch> Batches { get; }
+
+        /// <summary>
+        /// 获取创建快照时最近一次清空代次。
+        /// </summary>
+        public long ClearVersion { get; }
+
+        /// <summary>
+        /// 获取创建快照时统一收发缓存修订号。
+        /// </summary>
+        public long TrafficRevision { get; }
     }
 
     /// <summary>

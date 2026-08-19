@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using CH32UpperComputer.Infrastructure.Serial;
 using CH32UpperComputer.Testing;
 
@@ -10,6 +10,11 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
     [TestFixture]
     public sealed class SerialAssistantSessionServiceTests
     {
+        /// <summary>
+        /// 为并行运行 WPF 与基础设施测试时的线程调度预留稳定上限，不改变任何虚拟协议超时。
+        /// </summary>
+        private static readonly TimeSpan AsyncAssertionTimeout = TimeSpan.FromSeconds(5);
+
         /// <summary>
         /// 验证 115200 会话可以发送而不等待任何响应，并只统计成功写入。
         /// </summary>
@@ -83,14 +88,14 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             {
                 if (statistics.ReceiveBytes == 1)
                 {
-                    timeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+                    timeProvider.Advance(ReceiveWindowWithSchedulingMargin);
                 }
             };
             service.ReceiveUpdated += update => updateSource.TrySetResult(update);
 
             await transport.InjectReceiveAsync(new byte[] { 0x41 });
             SerialAssistantReceiveUpdate update = await updateSource.Task.WaitAsync(
-                TimeSpan.FromSeconds(2));
+                AsyncAssertionTimeout);
 
             Assert.That(update.Batch.Data.ToArray(), Is.EqualTo(new byte[] { 0x41 }));
         }
@@ -120,14 +125,25 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
                     Assert.That(service.Statistics.PausedDiscardedBytes, Is.EqualTo(3));
                 }));
 
+            TaskCompletionSource<SerialAssistantReceiveUpdate> resumedUpdateSource = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            service.StatisticsChanged += statistics =>
+            {
+                // StatisticsChanged 在合批定时器创建后同步发布；此处推进模拟时钟可避免
+                // 测试线程在定时器计算与注册之间抢占，导致截止点被人为后移。
+                if (statistics.ReceiveBytes == 5)
+                {
+                    timeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+                }
+            };
+            service.ReceiveUpdated += update => resumedUpdateSource.TrySetResult(update);
             service.SetPaused(false);
             await transport.InjectReceiveAsync(new byte[] { 0x21, 0x22 });
-            await WaitUntilAsync(() => service.Statistics.ReceiveBytes == 5);
-            timeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
-            await WaitUntilAsync(() => service.CreateReceiveSnapshot().Count == 1);
+            SerialAssistantReceiveUpdate resumedUpdate = await resumedUpdateSource.Task.WaitAsync(
+                AsyncAssertionTimeout);
 
             Assert.That(
-                service.CreateReceiveSnapshot()[0].Data.ToArray(),
+                resumedUpdate.Batch.Data.ToArray(),
                 Is.EqualTo(new byte[] { 0x21, 0x22 }));
         }
 
@@ -186,7 +202,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             Assert.That(transport.WrittenFrames, Is.Empty);
 
             timeProvider.Advance(TimeSpan.FromMilliseconds(1));
-            await firstCompletion.Entered.WaitAsync(TimeSpan.FromSeconds(1));
+            await firstCompletion.Entered.WaitAsync(AsyncAssertionTimeout);
             timeProvider.Advance(TimeSpan.FromSeconds(5));
             Assert.That(transport.WrittenFrames, Has.Count.EqualTo(1));
             Assert.That(transport.WrittenFrames[0].Span[0], Is.EqualTo(0x31));
@@ -243,7 +259,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             await service.ConnectAsync(settings, CancellationToken.None);
             await transport.InjectReceiveAsync(new byte[] { 0x5A });
             await WaitUntilAsync(() => service.Statistics.ReceiveBytes == 1);
-            timeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+            timeProvider.Advance(ReceiveWindowWithSchedulingMargin);
             await WaitUntilAsync(() => service.CreateReceiveSnapshot().Count == 1);
 
             Assert.Multiple(
@@ -301,7 +317,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
             Task sendTask = service.SendAsync(
                 new byte[] { 0x31 },
                 CancellationToken.None);
-            await completionPause.Entered.WaitAsync(TimeSpan.FromSeconds(2));
+            await completionPause.Entered.WaitAsync(AsyncAssertionTimeout);
 
             Task disconnectTask = service.DisconnectAsync(CancellationToken.None);
             await Task.Delay(20);
@@ -401,13 +417,13 @@ namespace CH32UpperComputer.Infrastructure.Tests.Serial
         /// <returns>条件满足后的任务。</returns>
         private static async Task WaitUntilAsync(Func<bool> condition)
         {
-            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
+            using CancellationTokenSource timeout = new(AsyncAssertionTimeout);
 
-                while (!condition())
-                {
-                    timeout.Token.ThrowIfCancellationRequested();
-                    await Task.Delay(1, timeout.Token);
-                }
+            while (!condition())
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Delay(1, timeout.Token);
+            }
         }
     }
 }

@@ -1,7 +1,8 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.Ports;
 using System.Text;
+using CH32UpperComputer.App.Collections;
 using CH32UpperComputer.App.Services;
 using CH32UpperComputer.Core.Protocol;
 using CH32UpperComputer.Infrastructure.Serial;
@@ -12,7 +13,7 @@ using CommunityToolkit.Mvvm.Input;
 namespace CH32UpperComputer.App.ViewModels
 {
     /// <summary>
-    /// 管理独立串口助手的线路参数、UTF-8/HEX 收发、接收视图和命令状态。
+    /// 管理独立串口助手的线路参数、UTF-8/HEX 收发、统一 TX/RX 画布和命令状态。
     /// </summary>
     public sealed partial class SerialAssistantViewModel : ObservableObject, IDisposable
     {
@@ -23,7 +24,7 @@ namespace CH32UpperComputer.App.ViewModels
             new UTF8Encoding(false, true);
 
         /// <summary>
-        /// 带 BOM 的 UTF-8 文件编码，用于保存当前接收视图。
+        /// 带 BOM 的 UTF-8 文件编码，用于保存当前统一收发画布。
         /// </summary>
         private static readonly Encoding Utf8WithBom =
             new UTF8Encoding(true, false);
@@ -44,6 +45,12 @@ namespace CH32UpperComputer.App.ViewModels
         private readonly IUiDispatcher dispatcher;
 
         /// <summary>
+        /// 保存当前可视 TX/RX 消息，并支持快照重绘时的一次性 Reset 通知。
+        /// </summary>
+        private readonly ResettableObservableCollection<SerialAssistantTrafficDisplayRecord>
+            mutableTrafficRecords = [];
+
+        /// <summary>
         /// 保护热插拔防抖取消源替换与释放的同步门。
         /// </summary>
         private readonly object portRefreshSyncRoot = new();
@@ -59,14 +66,19 @@ namespace CH32UpperComputer.App.ViewModels
         private Decoder liveUtf8Decoder = CreateDisplayUtf8Decoder();
 
         /// <summary>
-        /// 当前视图已经完整应用的接收缓存修订号。
+        /// 当前画布已经完整应用的统一 TX/RX 缓存修订号。
         /// </summary>
-        private long renderedCacheRevision;
+        private long renderedTrafficRevision;
 
         /// <summary>
         /// 当前视图允许接受的最早清空代次，旧代次的排队更新必须丢弃。
         /// </summary>
         private long acceptedClearVersion;
+
+        /// <summary>
+        /// 最近一项 RX 记录的时间，用于会话结束时标记残留的不完整 UTF-8 字符。
+        /// </summary>
+        private DateTimeOffset? lastReceiveRecordedAtUtc;
 
         /// <summary>
         /// 当前状态栏已经应用的最新统计修订号。
@@ -109,7 +121,7 @@ namespace CH32UpperComputer.App.ViewModels
         private SerialAssistantDataMode sendMode;
 
         /// <summary>
-        /// 当前接收视图模式。
+        /// 当前统一收发画布的数据显示模式。
         /// </summary>
         [ObservableProperty]
         private SerialAssistantDataMode receiveMode;
@@ -121,13 +133,13 @@ namespace CH32UpperComputer.App.ViewModels
         private bool appendNewLine;
 
         /// <summary>
-        /// 接收视图是否显示每个合并批次的时间戳。
+        /// 统一收发画布是否显示每项记录的时间戳。
         /// </summary>
         [ObservableProperty]
         private bool showTimestamps;
 
         /// <summary>
-        /// 接收视图内容变化时是否自动滚动到底部。
+        /// 统一收发画布内容变化时是否自动滚动到底部。
         /// </summary>
         [ObservableProperty]
         private bool autoScroll;
@@ -145,13 +157,13 @@ namespace CH32UpperComputer.App.ViewModels
         private string sendText;
 
         /// <summary>
-        /// 当前仅包含 RX 数据的只读接收视图文本。
+        /// 当前按发生顺序包含 TX 与 RX 数据的只读串口画布文本。
         /// </summary>
         [ObservableProperty]
         private string receiveText = string.Empty;
 
         /// <summary>
-        /// 最近一次保存当前接收视图的目录。
+        /// 最近一次保存当前统一收发画布的目录。
         /// </summary>
         [ObservableProperty]
         private string saveDirectory;
@@ -273,6 +285,8 @@ namespace CH32UpperComputer.App.ViewModels
             periodicIntervalMilliseconds = safePreferences.PeriodicIntervalMilliseconds;
             sendText = safePreferences.LastInput;
             saveDirectory = safePreferences.SaveDirectory;
+            TrafficRecords = new ReadOnlyObservableCollection<SerialAssistantTrafficDisplayRecord>(
+                mutableTrafficRecords);
             AvailablePorts = new ObservableCollection<SerialPortDescriptor>();
             BaudRates = Array.AsReadOnly(new[] { 2400, 4800, 9600, 19200, 38400, 57600, 115200 });
             DataBitOptions = Array.AsReadOnly(new[] { 5, 6, 7, 8 });
@@ -297,13 +311,13 @@ namespace CH32UpperComputer.App.ViewModels
             TogglePauseCommand = new RelayCommand(TogglePause, CanTogglePause);
             ClearCommand = new RelayCommand(ClearReceive, CanClear);
             sessionService.StateChanged += HandleStateChanged;
-            sessionService.ReceiveUpdated += HandleReceiveUpdated;
+            sessionService.TrafficUpdated += HandleTrafficUpdated;
             sessionService.StatisticsChanged += HandleStatisticsChanged;
             sessionService.PeriodicSendingChanged += HandlePeriodicSendingChanged;
             ApplyStatistics(sessionService.Statistics);
-            SerialAssistantReceiveSnapshot initialSnapshot =
-                sessionService.CreateReceiveSnapshotState();
-            renderedCacheRevision = initialSnapshot.CacheRevision;
+            SerialAssistantTrafficSnapshot initialSnapshot =
+                sessionService.CreateTrafficSnapshotState();
+            renderedTrafficRevision = initialSnapshot.TrafficRevision;
             acceptedClearVersion = initialSnapshot.ClearVersion;
         }
 
@@ -332,6 +346,14 @@ namespace CH32UpperComputer.App.ViewModels
         /// 获取当前发现的系统串口描述集合。
         /// </summary>
         public ObservableCollection<SerialPortDescriptor> AvailablePorts { get; }
+
+        /// <summary>
+        /// 获取按发生顺序排列、供分色串口画布绑定的只读 TX/RX 消息集合。
+        /// </summary>
+        public ReadOnlyObservableCollection<SerialAssistantTrafficDisplayRecord> TrafficRecords
+        {
+            get;
+        }
 
         /// <summary>
         /// 获取普通串口助手固定支持的七档波特率。
@@ -557,7 +579,7 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 将当前接收视图按 UTF-8 BOM 原样保存到用户选择的文本文件。
+        /// 将当前统一 TX/RX 画布按 UTF-8 BOM 原样保存到用户选择的文本文件。
         /// </summary>
         /// <param name="filePath">用户选择的目标 <c>.txt</c> 路径。</param>
         /// <param name="cancellationToken">取消尚未完成的文本文件写入。</param>
@@ -632,7 +654,7 @@ namespace CH32UpperComputer.App.ViewModels
 
             isDisposed = true;
             sessionService.StateChanged -= HandleStateChanged;
-            sessionService.ReceiveUpdated -= HandleReceiveUpdated;
+            sessionService.TrafficUpdated -= HandleTrafficUpdated;
             sessionService.StatisticsChanged -= HandleStatisticsChanged;
             sessionService.PeriodicSendingChanged -= HandlePeriodicSendingChanged;
 
@@ -719,7 +741,7 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 严格构造并单次发送当前负载，不等待响应且不回显 TX 到接收区。
+        /// 严格构造并单次发送当前负载；成功写入后由会话事件把 TX 追加到统一画布。
         /// </summary>
         /// <returns>发送操作及界面错误提交完成后的任务。</returns>
         private async Task SendAsync()
@@ -803,9 +825,13 @@ namespace CH32UpperComputer.App.ViewModels
         {
             SerialAssistantReceiveSnapshot clearedSnapshot =
                 sessionService.ClearReceiveData();
+            SerialAssistantTrafficSnapshot clearedTrafficSnapshot =
+                sessionService.CreateTrafficSnapshotState();
             acceptedClearVersion = clearedSnapshot.ClearVersion;
-            renderedCacheRevision = clearedSnapshot.CacheRevision;
+            renderedTrafficRevision = clearedTrafficSnapshot.TrafficRevision;
             liveUtf8Decoder = CreateDisplayUtf8Decoder();
+            lastReceiveRecordedAtUtc = null;
+            mutableTrafficRecords.Clear();
             ReceiveText = string.Empty;
             ApplyStatistics(sessionService.Statistics);
         }
@@ -849,30 +875,30 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 接收后台缓存更新，并按当前模式增量追加或从原始缓存完整重绘。
+        /// 接收后台统一收发缓存更新，并按当前模式增量追加或从快照完整重绘。
         /// </summary>
-        /// <param name="update">新批次及缓存淘汰标记。</param>
-        private void HandleReceiveUpdated(SerialAssistantReceiveUpdate update)
+        /// <param name="update">新 TX/RX 记录、缓存淘汰标记和排序版本。</param>
+        private void HandleTrafficUpdated(SerialAssistantTrafficUpdate update)
         {
             dispatcher.Post(
                 () =>
                 {
                     if (update.ClearVersion < acceptedClearVersion ||
-                        update.CacheRevision <= renderedCacheRevision)
+                        update.TrafficRevision <= renderedTrafficRevision)
                     {
                         return;
                     }
 
                     if (update.ClearVersion > acceptedClearVersion ||
                         update.RequiresFullRefresh ||
-                        update.CacheRevision != renderedCacheRevision + 1)
+                        update.TrafficRevision != renderedTrafficRevision + 1)
                     {
-                        RefreshReceiveTextFromSnapshot();
+                        RefreshTrafficTextFromSnapshot();
                         return;
                     }
 
-                    ReceiveText += RenderBatchIncrementally(update.Batch);
-                    renderedCacheRevision = update.CacheRevision;
+                    AppendTrafficRecord(RenderTrafficBatchIncrementally(update.Batch));
+                    renderedTrafficRevision = update.TrafficRevision;
                 });
         }
 
@@ -914,66 +940,193 @@ namespace CH32UpperComputer.App.ViewModels
         }
 
         /// <summary>
-        /// 从 512 KiB 有界原始缓存按当前模式和时间戳选项完整重绘。
+        /// 从 512 KiB 有界统一收发缓存按当前模式和时间戳选项完整重绘画布。
         /// </summary>
-        private void RefreshReceiveTextFromSnapshot()
+        private void RefreshTrafficTextFromSnapshot()
         {
-            SerialAssistantReceiveSnapshot snapshot =
-                sessionService.CreateReceiveSnapshotState();
+            SerialAssistantTrafficSnapshot snapshot =
+                sessionService.CreateTrafficSnapshotState();
             StringBuilder builder = new();
+            List<SerialAssistantTrafficDisplayRecord> records = [];
             liveUtf8Decoder = CreateDisplayUtf8Decoder();
-            int? previousPortGeneration = null;
+            lastReceiveRecordedAtUtc = null;
+            int? previousReceivePortGeneration = null;
 
-            foreach (SerialAssistantReceiveBatch batch in snapshot.Batches)
+            foreach (SerialAssistantTrafficBatch batch in snapshot.Batches)
             {
                 if (ReceiveMode == SerialAssistantDataMode.Utf8 &&
-                    previousPortGeneration.HasValue &&
-                    previousPortGeneration.Value != batch.PortGeneration)
+                    batch.Direction == SerialAssistantTrafficDirection.Receive &&
+                    previousReceivePortGeneration.HasValue &&
+                    previousReceivePortGeneration.Value != batch.PortGeneration)
                 {
-                    builder.Append(
-                        DecodeUtf8(
-                            ReadOnlySpan<byte>.Empty,
-                            liveUtf8Decoder,
-                            true));
-                    liveUtf8Decoder = CreateDisplayUtf8Decoder();
+                    AddTrafficRecordToSnapshot(
+                        CompletePendingReceiveRecord(),
+                        records,
+                        builder);
                 }
 
-                builder.Append(RenderBatchIncrementally(batch));
-                previousPortGeneration = batch.PortGeneration;
+                AddTrafficRecordToSnapshot(
+                    RenderTrafficBatchIncrementally(batch),
+                    records,
+                    builder);
+
+                if (batch.Direction == SerialAssistantTrafficDirection.Receive)
+                {
+                    previousReceivePortGeneration = batch.PortGeneration;
+                }
             }
 
             if (ReceiveMode == SerialAssistantDataMode.Utf8 && !IsConnected)
             {
-                builder.Append(
-                    DecodeUtf8(
-                        ReadOnlySpan<byte>.Empty,
-                        liveUtf8Decoder,
-                        true));
-                liveUtf8Decoder = CreateDisplayUtf8Decoder();
+                AddTrafficRecordToSnapshot(
+                    CompletePendingReceiveRecord(),
+                    records,
+                    builder);
             }
 
+            mutableTrafficRecords.ReplaceAll(records);
             ReceiveText = builder.ToString();
             acceptedClearVersion = snapshot.ClearVersion;
-            renderedCacheRevision = snapshot.CacheRevision;
+            renderedTrafficRevision = snapshot.TrafficRevision;
         }
 
         /// <summary>
-        /// 按当前 UTF-8 或 HEX 模式渲染一个批次，并在文本模式保留 Decoder 跨批次状态。
+        /// 按当前 UTF-8 或 HEX 模式渲染一项 TX/RX 记录，并为 RX 保留跨批次 Decoder 状态。
         /// </summary>
-        /// <param name="batch">待增量渲染的原始接收批次。</param>
-        /// <returns>应追加到当前接收视图的文本。</returns>
-        private string RenderBatchIncrementally(SerialAssistantReceiveBatch batch)
+        /// <param name="batch">待增量渲染的统一收发记录。</param>
+        /// <returns>可分色的双行画布记录；尚无完整 UTF-8 字符时为空。</returns>
+        private SerialAssistantTrafficDisplayRecord? RenderTrafficBatchIncrementally(
+            SerialAssistantTrafficBatch batch)
         {
-            string timestampPrefix = ShowTimestamps
-                ? $"[{batch.ArrivedAtUtc.ToLocalTime():HH:mm:ss.fff}] "
-                : string.Empty;
+            string renderedData;
 
             if (ReceiveMode == SerialAssistantDataMode.Hex)
             {
-                return timestampPrefix + HexFrameParser.Format(batch.Data.Span) + "\r\n";
+                renderedData = HexFrameParser.Format(batch.Data.Span);
+            }
+            else if (batch.Direction == SerialAssistantTrafficDirection.Receive)
+            {
+                renderedData = DecodeUtf8(batch.Data.Span, liveUtf8Decoder, false);
+                lastReceiveRecordedAtUtc = batch.RecordedAtUtc;
+            }
+            else
+            {
+                renderedData = DecodeUtf8(
+                    batch.Data.Span,
+                    CreateDisplayUtf8Decoder(),
+                    true);
             }
 
-            return timestampPrefix + DecodeUtf8(batch.Data.Span, liveUtf8Decoder, false);
+            if (renderedData.Length == 0)
+            {
+                return null;
+            }
+
+            return CreateTrafficDisplayRecord(
+                batch.Direction,
+                batch.RecordedAtUtc,
+                renderedData);
+        }
+
+        /// <summary>
+        /// 将当前 RX Decoder 中残留的不完整 UTF-8 序列输出为替代字符并开始新序列。
+        /// </summary>
+        /// <returns>存在残留字符时返回 RX 双行记录，否则返回空。</returns>
+        private SerialAssistantTrafficDisplayRecord? CompletePendingReceiveRecord()
+        {
+            string renderedData = DecodeUtf8(
+                ReadOnlySpan<byte>.Empty,
+                liveUtf8Decoder,
+                true);
+            liveUtf8Decoder = CreateDisplayUtf8Decoder();
+
+            if (renderedData.Length == 0)
+            {
+                return null;
+            }
+
+            return CreateTrafficDisplayRecord(
+                SerialAssistantTrafficDirection.Receive,
+                lastReceiveRecordedAtUtc ?? DateTimeOffset.UtcNow,
+                renderedData);
+        }
+
+        /// <summary>
+        /// 为统一串口画布创建秒级标题、规范化正文和 TX/RX 方向语义。
+        /// </summary>
+        /// <param name="direction">当前记录的发送或接收方向。</param>
+        /// <param name="recordedAtUtc">数据实际发送完成或到达线路的 UTC 时刻。</param>
+        /// <param name="renderedData">已经按当前显示模式转换的非空数据文本。</param>
+        /// <returns>可以绑定到分色列表并保存为纯文本的双行消息。</returns>
+        private SerialAssistantTrafficDisplayRecord CreateTrafficDisplayRecord(
+            SerialAssistantTrafficDirection direction,
+            DateTimeOffset recordedAtUtc,
+            string renderedData)
+        {
+            string directionLabel = direction == SerialAssistantTrafficDirection.Transmit
+                ? "TX"
+                : "RX";
+            string headerText = ShowTimestamps
+                ? $"[{recordedAtUtc.ToLocalTime():HH:mm:ss}]  {directionLabel}"
+                : directionLabel;
+            string payloadText = NormalizeTrafficPayload(renderedData);
+            return new SerialAssistantTrafficDisplayRecord(
+                direction,
+                headerText,
+                payloadText);
+        }
+
+        /// <summary>
+        /// 把一项增量记录同时追加到彩色画布集合和可保存纯文本视图。
+        /// </summary>
+        /// <param name="record">已完成解码的消息；不完整 UTF-8 尚无输出时为空。</param>
+        private void AppendTrafficRecord(SerialAssistantTrafficDisplayRecord? record)
+        {
+            if (record is null)
+            {
+                return;
+            }
+
+            mutableTrafficRecords.Add(record);
+            ReceiveText += record.PlainText;
+        }
+
+        /// <summary>
+        /// 把重绘阶段产生的一项记录同步写入集合快照与纯文本构建器。
+        /// </summary>
+        /// <param name="record">已完成解码的消息；不完整 UTF-8 尚无输出时为空。</param>
+        /// <param name="records">按顺序累积的分色消息集合。</param>
+        /// <param name="builder">按相同顺序累积的保存文本。</param>
+        private static void AddTrafficRecordToSnapshot(
+            SerialAssistantTrafficDisplayRecord? record,
+            ICollection<SerialAssistantTrafficDisplayRecord> records,
+            StringBuilder builder)
+        {
+            ArgumentNullException.ThrowIfNull(records);
+            ArgumentNullException.ThrowIfNull(builder);
+
+            if (record is null)
+            {
+                return;
+            }
+
+            records.Add(record);
+            builder.Append(record.PlainText);
+        }
+
+        /// <summary>
+        /// 统一串口正文换行，并移除线路尾部分隔换行，避免每项消息产生额外空白正文。
+        /// </summary>
+        /// <param name="renderedData">UTF-8 或 HEX 转换后的原始显示文本。</param>
+        /// <returns>内部使用 CRLF 且不含尾部 CR/LF 的画布正文。</returns>
+        private static string NormalizeTrafficPayload(string renderedData)
+        {
+            ArgumentNullException.ThrowIfNull(renderedData);
+            string normalized = renderedData
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .TrimEnd('\n');
+            return normalized.Replace("\n", "\r\n", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -1023,13 +1176,11 @@ namespace CH32UpperComputer.App.ViewModels
         {
             if (ReceiveMode == SerialAssistantDataMode.Utf8)
             {
-                ReceiveText += DecodeUtf8(
-                    ReadOnlySpan<byte>.Empty,
-                    liveUtf8Decoder,
-                    true);
+                AppendTrafficRecord(CompletePendingReceiveRecord());
             }
 
             liveUtf8Decoder = CreateDisplayUtf8Decoder();
+            lastReceiveRecordedAtUtc = null;
         }
 
         /// <summary>
@@ -1243,7 +1394,7 @@ namespace CH32UpperComputer.App.ViewModels
         partial void OnReceiveModeChanged(SerialAssistantDataMode value)
         {
             _ = value;
-            RefreshReceiveTextFromSnapshot();
+            RefreshTrafficTextFromSnapshot();
         }
 
         /// <summary>
@@ -1253,7 +1404,7 @@ namespace CH32UpperComputer.App.ViewModels
         partial void OnShowTimestampsChanged(bool value)
         {
             _ = value;
-            RefreshReceiveTextFromSnapshot();
+            RefreshTrafficTextFromSnapshot();
         }
 
         /// <summary>

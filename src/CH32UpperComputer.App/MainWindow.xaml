@@ -5,182 +5,439 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="clr-namespace:CH32UpperComputer.App.Views"
         mc:Ignorable="d"
-        Title="CH32 工业监控上位机"
-        Width="1480"
-        Height="920"
+        Title="CKAPP"
+        Width="1440"
+        Height="900"
         MinWidth="1180"
         MinHeight="720"
         WindowStartupLocation="CenterScreen"
-        Background="{DynamicResource Brush.Window}">
-    <Grid Margin="20,16,20,18">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="70" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+        Background="{DynamicResource Brush.WindowBackdrop}">
+    <Window.Resources>
+        <Style x:Key="ConnectionDrawer.Expander" TargetType="Expander">
+            <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Expander">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="46" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ToggleButton x:Name="HeaderSite"
+                                          Grid.Row="0"
+                                          Width="94"
+                                          Height="46"
+                                          Margin="0"
+                                          HorizontalAlignment="Right"
+                                          VerticalAlignment="Top"
+                                          Background="{DynamicResource Brush.Primary}"
+                                          BorderBrush="{DynamicResource Brush.PrimaryBright}"
+                                          BorderThickness="1"
+                                          Content="{TemplateBinding Header}"
+                                          FontWeight="SemiBold"
+                                          Foreground="{DynamicResource Brush.InverseText}"
+                                          IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="DrawerButtonBody"
+                                                Background="{DynamicResource Brush.NavigationActive}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="13">
+                                            <TextBlock HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Brush.InverseText}"
+                                                       Text="{TemplateBinding Content}" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="DrawerButtonBody"
+                                                        Property="Opacity"
+                                                        Value="0.9" />
+                                            </Trigger>
+                                            <Trigger Property="IsPressed" Value="True">
+                                                <Setter TargetName="DrawerButtonBody"
+                                                        Property="Opacity"
+                                                        Value="0.78" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ExpandSite"
+                                              Grid.Row="1"
+                                              Margin="0,8,0,0"
+                                              HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Top"
+                                              ContentSource="Content"
+                                              Visibility="Collapsed" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="True">
+                                <Setter TargetName="ExpandSite"
+                                        Property="Visibility"
+                                        Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
-        <Grid Grid.Row="0">
+    <Border Margin="14"
+            Background="{DynamicResource Brush.StageGradient}"
+            BorderBrush="{DynamicResource Brush.BorderStrong}"
+            BorderThickness="1"
+            ClipToBounds="True"
+            CornerRadius="22">
+        <Grid>
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="248" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Style="{StaticResource Text.PageTitle}" Text="CH32 工业监控上位机" />
-                <TextBlock Margin="0,5,0,0"
-                           Style="{StaticResource Text.Caption}"
-                           Text="Modbus-RTU · Ethernet IAP · 连接后等待手动指令" />
-            </StackPanel>
-            <Border Grid.Column="1"
-                    Style="{StaticResource Card}"
-                    Padding="16,10"
-                    VerticalAlignment="Center">
-                <StackPanel Orientation="Horizontal">
-                    <StackPanel Margin="0,0,20,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
-                        <TextBlock FontWeight="SemiBold" Text="{Binding PortStatus}" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,20,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
-                        <TextBlock FontWeight="SemiBold" Text="{Binding BaudRateStatus}" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,20,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="从站" />
-                        <TextBlock FontWeight="SemiBold" Text="{Binding SlaveAddressStatus}" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,20,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="连接状态" />
-                        <TextBlock Foreground="{DynamicResource Brush.Normal}"
-                                   FontWeight="SemiBold"
-                                   Text="{Binding ConnectionStatus}" />
-                    </StackPanel>
-                    <StackPanel>
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="最近响应" />
-                        <TextBlock FontWeight="SemiBold" Text="{Binding LastResponseDurationText}" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-        </Grid>
 
-        <Expander x:Name="SerialSettingsExpander"
-                  Grid.Row="1"
-                  Margin="0,0,0,10"
-                  Foreground="{DynamicResource Brush.TextSecondary}"
-                  Header="Modbus 串口与连接设置（展开）"
-                  Expanded="HandleSerialSettingsExpanded">
-            <Border Margin="0,8,0,0" Style="{StaticResource Card}" Padding="14">
+            <Border Grid.Column="0"
+                    Background="{DynamicResource Brush.RailGradient}"
+                    BorderBrush="{DynamicResource Brush.Border}"
+                    BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="150" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="92" />
                     </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="130" />
-                        <ColumnDefinition Width="115" />
-                        <ColumnDefinition Width="90" />
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="95" />
-                        <ColumnDefinition Width="125" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
-                        <ComboBox x:Name="SerialPortComboBox"
-                                  ItemsSource="{Binding SerialConnection.AvailablePorts}"
-                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                  IsEditable="True"
-                                  DropDownOpened="HandleSerialPortDropDownOpened"
-                                  TextSearch.TextPath="PortName"
-                                  Text="{Binding SerialConnection.PortName, UpdateSourceTrigger=PropertyChanged}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Foreground="{DynamicResource Brush.TextPrimary}"
-                                               Text="{Binding DisplayName}"
-                                               TextTrimming="CharacterEllipsis" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
-                        <ComboBox ItemsSource="{Binding SerialConnection.BaudRates}"
-                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                  SelectedItem="{Binding SerialConnection.BaudRate}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="数据位" />
-                        <ComboBox ItemsSource="{Binding SerialConnection.DataBitOptions}"
-                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                  SelectedItem="{Binding SerialConnection.DataBits}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="3" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="校验" />
-                        <ComboBox ItemsSource="{Binding SerialConnection.ParityOptions}"
-                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                  SelectedItem="{Binding SerialConnection.Parity}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="4" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="停止位" />
-                        <ComboBox ItemsSource="{Binding SerialConnection.StopBitOptions}"
-                                  IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                  SelectedItem="{Binding SerialConnection.StopBits}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="5" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="从站地址" />
-                        <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                 Text="{Binding SerialConnection.SlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="6" Margin="0,0,8,0">
-                        <TextBlock Style="{StaticResource Text.Muted}" Text="总超时 ms" />
-                        <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
-                                 Text="{Binding SerialConnection.ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Bottom">
-                        <Button Margin="0,0,8,0"
-                                Command="{Binding SerialConnection.RefreshPortsCommand}"
-                                Content="刷新串口" />
-                        <Button Margin="0,0,8,0"
-                                Command="{Binding SerialConnection.ResetDefaultsCommand}"
-                                Content="恢复默认" />
-                        <Button Margin="0,0,8,0"
-                                Style="{StaticResource Button.Primary}"
-                                Command="{Binding SerialConnection.ConnectCommand}"
-                                Content="连接" />
-                        <Button Command="{Binding SerialConnection.DisconnectCommand}" Content="断开" />
-                    </StackPanel>
-                    <StackPanel Grid.Row="1"
-                                Grid.ColumnSpan="8"
-                                Margin="0,10,0,0">
-                        <TextBlock Foreground="{DynamicResource Brush.TextSecondary}"
-                                   Text="{Binding SerialConnection.PortDiscoveryStatus}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Margin="0,3,0,0"
-                                   Foreground="{DynamicResource Brush.Danger}"
-                                   Text="{Binding SerialConnection.ErrorMessage}"
+
+                    <Grid Grid.Row="0" Margin="18,18,16,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="52" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="50"
+                                Height="50"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Background="{DynamicResource Brush.NavigationActive}"
+                                BorderBrush="{DynamicResource Brush.Plum}"
+                                BorderThickness="0,0,0,3"
+                                CornerRadius="10">
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       FontFamily="Bahnschrift"
+                                       FontSize="15"
+                                       FontWeight="Bold"
+                                       Foreground="{DynamicResource Brush.InverseText}"
+                                       Text="CK" />
+                        </Border>
+                        <StackPanel Grid.Column="1"
+                                    Margin="12,5,0,0"
+                                    VerticalAlignment="Top">
+                            <TextBlock FontFamily="Bahnschrift, Microsoft YaHei UI"
+                                       FontSize="24"
+                                       FontWeight="SemiBold"
+                                       Text="CKAPP" />
+                            <TextBlock Margin="1,3,0,0"
+                                       FontFamily="Cascadia Mono, Consolas"
+                                       FontSize="8"
+                                       Foreground="{DynamicResource Brush.TextSecondary}"
+                                       Text="MULTI-SENSOR CONSOLE" />
+                        </StackPanel>
+                        <Border Grid.ColumnSpan="2"
+                                Margin="0,0,0,0"
+                                VerticalAlignment="Bottom"
+                                BorderBrush="{DynamicResource Brush.Border}"
+                                BorderThickness="0,0,0,1" />
+                    </Grid>
+
+                    <Image Grid.Row="1"
+                           Width="205"
+                           Height="150"
+                           Margin="0,2,0,0"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Top"
+                           IsHitTestVisible="False"
+                           Opacity="0.11"
+                           Source="Assets/InkPlumReference.jpg"
+                           Stretch="UniformToFill"
+                           StretchDirection="DownOnly" />
+
+                    <Grid x:Name="NavigationAnimationHost"
+                          Grid.Row="1"
+                          Height="380"
+                          Margin="14,0"
+                          VerticalAlignment="Center">
+                        <Border x:Name="NavigationIndicator"
+                                Height="68"
+                                Panel.ZIndex="0"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Top"
+                                Background="{DynamicResource Brush.NavigationActive}"
+                                BorderBrush="#3DFFFFFF"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                IsHitTestVisible="False">
+                            <Border.RenderTransform>
+                                <TranslateTransform x:Name="NavigationIndicatorTranslate" />
+                            </Border.RenderTransform>
+                            <Grid>
+                                <Border Width="4"
+                                        Margin="0,12,0,12"
+                                        HorizontalAlignment="Left"
+                                        Background="{DynamicResource Brush.NavigationThread}"
+                                        CornerRadius="0,3,3,0" />
+                            </Grid>
+                        </Border>
+                        <ListBox x:Name="ModeNavigation"
+                                 Height="380"
+                                 Panel.ZIndex="1"
+                                 VerticalAlignment="Center"
+                                 ItemContainerStyle="{StaticResource Navigation.Item}"
+                                 SelectedIndex="0"
+                                 SelectionChanged="HandleNavigationSelectionChanged"
+                                 Style="{StaticResource Navigation.ListBox}">
+                            <ListBoxItem Content="实时监控"
+                                         MouseEnter="HandleNavigationItemMouseEnter"
+                                         MouseLeave="HandleNavigationItemMouseLeave" />
+                            <ListBoxItem Content="参数设置"
+                                         MouseEnter="HandleNavigationItemMouseEnter"
+                                         MouseLeave="HandleNavigationItemMouseLeave" />
+                            <ListBoxItem Content="通信日志"
+                                         MouseEnter="HandleNavigationItemMouseEnter"
+                                         MouseLeave="HandleNavigationItemMouseLeave" />
+                            <ListBoxItem Content="固件升级"
+                                         MouseEnter="HandleNavigationItemMouseEnter"
+                                         MouseLeave="HandleNavigationItemMouseLeave" />
+                            <ListBoxItem Content="串口助手"
+                                         MouseEnter="HandleNavigationItemMouseEnter"
+                                         MouseLeave="HandleNavigationItemMouseLeave" />
+                        </ListBox>
+                    </Grid>
+
+                    <StackPanel Grid.Row="2" Margin="18,0,18,14">
+                        <Border BorderBrush="{DynamicResource Brush.Border}"
+                                BorderThickness="0,1,0,0" />
+                        <TextBlock Margin="0,12,0,0"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Brush.Normal}"
+                                   Text="连接后保持静默" />
+                        <TextBlock Margin="0,5,0,0"
+                                   Style="{StaticResource Text.Muted}"
+                                   Text="所有读取与发送均由用户主动触发。"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Grid>
             </Border>
-        </Expander>
 
-        <TabControl x:Name="MainTabs"
-                    Grid.Row="2">
-            <TabItem Header="实时监控">
-                <views:MonitorView DataContext="{Binding}" />
-            </TabItem>
-            <TabItem Header="参数设置">
-                <views:ParametersView x:Name="ParametersPage"
-                                      DataContext="{Binding Parameters}" />
-            </TabItem>
-            <TabItem Header="通信日志">
-                <views:CommunicationLogView DataContext="{Binding CommunicationLog}" />
-            </TabItem>
-            <TabItem Header="固件升级">
-                <views:FirmwareUpgradeView DataContext="{Binding FirmwareUpgrade}" />
-            </TabItem>
-            <TabItem Header="串口助手">
-                <views:SerialAssistantView DataContext="{Binding SerialAssistant}" />
-            </TabItem>
-        </TabControl>
-    </Grid>
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="70" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0"
+                        Background="#88F4F6F2"
+                        BorderBrush="{DynamicResource Brush.Border}"
+                        BorderThickness="0,0,0,1">
+                    <Grid Margin="14,0,12,0">
+                        <Border x:Name="TopAccentLine"
+                                Width="360"
+                                Height="1"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                RenderTransformOrigin="0,0.5">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Offset="0" Color="{StaticResource Color.Plum}" />
+                                    <GradientStop Offset="0.56" Color="{StaticResource Color.Gold}" />
+                                    <GradientStop Offset="1" Color="#007C9795" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="TopAccentScale" ScaleX="0" />
+                            </Border.RenderTransform>
+                        </Border>
+
+                        <Border Width="480"
+                                Height="50"
+                                Margin="0,0,106,0"
+                                HorizontalAlignment="Right"
+                                Background="#C9F8F9F6"
+                                BorderBrush="{DynamicResource Brush.Border}"
+                                BorderThickness="1"
+                                CornerRadius="12">
+                            <UniformGrid Columns="5">
+                                <StackPanel Margin="11,7,8,0">
+                                    <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
+                                    <TextBlock FontFamily="Cascadia Mono, Consolas"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding PortStatus}" />
+                                </StackPanel>
+                                <StackPanel Margin="11,7,8,0">
+                                    <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
+                                    <TextBlock FontFamily="Cascadia Mono, Consolas"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding BaudRateStatus}" />
+                                </StackPanel>
+                                <StackPanel Margin="11,7,8,0">
+                                    <TextBlock Style="{StaticResource Text.Muted}" Text="从站" />
+                                    <TextBlock FontFamily="Cascadia Mono, Consolas"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding SlaveAddressStatus}" />
+                                </StackPanel>
+                                <StackPanel Margin="11,7,8,0">
+                                    <TextBlock Style="{StaticResource Text.Muted}" Text="连接状态" />
+                                    <TextBlock FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Brush.Danger}"
+                                               Text="{Binding ConnectionStatus}" />
+                                </StackPanel>
+                                <StackPanel Margin="11,7,8,0">
+                                    <TextBlock Style="{StaticResource Text.Muted}" Text="最近响应" />
+                                    <TextBlock FontFamily="Cascadia Mono, Consolas"
+                                               FontWeight="SemiBold"
+                                               Text="{Binding LastResponseDurationText}" />
+                                </StackPanel>
+                            </UniformGrid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1"
+                        Margin="12">
+                    <TabControl x:Name="MainTabs"
+                                SelectedIndex="{Binding ElementName=ModeNavigation, Path=SelectedIndex, Mode=OneWay}"
+                                Style="{StaticResource TabControl.ContentOnly}">
+                        <TabItem Header="实时监控">
+                            <views:MonitorView DataContext="{Binding}" />
+                        </TabItem>
+                        <TabItem Header="参数设置">
+                            <views:ParametersView x:Name="ParametersPage"
+                                                  DataContext="{Binding Parameters}" />
+                        </TabItem>
+                        <TabItem Header="通信日志">
+                            <views:CommunicationLogView DataContext="{Binding CommunicationLog}" />
+                        </TabItem>
+                        <TabItem Header="固件升级">
+                            <views:FirmwareUpgradeView DataContext="{Binding FirmwareUpgrade}" />
+                        </TabItem>
+                        <TabItem Header="串口助手">
+                            <views:SerialAssistantView DataContext="{Binding SerialAssistant}" />
+                        </TabItem>
+                    </TabControl>
+                </Border>
+
+                <Expander x:Name="SerialSettingsExpander"
+                          Grid.Row="0"
+                          Grid.RowSpan="2"
+                          Margin="12,12,12,0"
+                          Panel.ZIndex="20"
+                          VerticalAlignment="Top"
+                          Expanded="HandleSerialSettingsExpanded"
+                          Header="连接设置"
+                          Style="{StaticResource ConnectionDrawer.Expander}">
+                    <Border Padding="14"
+                            Background="#F6F8F6"
+                            BorderBrush="{DynamicResource Brush.BorderStrong}"
+                            BorderThickness="1"
+                            CornerRadius="14">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.35*" MinWidth="145" />
+                                <ColumnDefinition Width="0.82*" MinWidth="92" />
+                                <ColumnDefinition Width="0.68*" MinWidth="76" />
+                                <ColumnDefinition Width="0.9*" MinWidth="102" />
+                                <ColumnDefinition Width="0.9*" MinWidth="102" />
+                                <ColumnDefinition Width="0.72*" MinWidth="80" />
+                                <ColumnDefinition Width="0.95*" MinWidth="108" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="串口" />
+                                <ComboBox x:Name="SerialPortComboBox"
+                                          ItemsSource="{Binding SerialConnection.AvailablePorts}"
+                                          IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                          IsEditable="True"
+                                          DropDownOpened="HandleSerialPortDropDownOpened"
+                                          TextSearch.TextPath="PortName"
+                                          Text="{Binding SerialConnection.PortName, UpdateSourceTrigger=PropertyChanged}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Foreground="{DynamicResource Brush.TextPrimary}"
+                                                       Text="{Binding DisplayName}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="波特率" />
+                                <ComboBox ItemsSource="{Binding SerialConnection.BaudRates}"
+                                          IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                          SelectedItem="{Binding SerialConnection.BaudRate}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="数据位" />
+                                <ComboBox ItemsSource="{Binding SerialConnection.DataBitOptions}"
+                                          IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                          SelectedItem="{Binding SerialConnection.DataBits}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="3" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="校验" />
+                                <ComboBox ItemsSource="{Binding SerialConnection.ParityOptions}"
+                                          IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                          SelectedItem="{Binding SerialConnection.Parity}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="4" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="停止位" />
+                                <ComboBox ItemsSource="{Binding SerialConnection.StopBitOptions}"
+                                          IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                          SelectedItem="{Binding SerialConnection.StopBits}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="5" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="从站地址" />
+                                <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                         Text="{Binding SerialConnection.SlaveAddress, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="6" Margin="0,0,8,0">
+                                <TextBlock Style="{StaticResource Text.Muted}" Text="总超时 ms" />
+                                <TextBox IsEnabled="{Binding SerialConnection.CanEditSerialSettings}"
+                                         Text="{Binding SerialConnection.ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                            <WrapPanel Grid.Column="7" VerticalAlignment="Bottom">
+                                <Button Margin="0,0,6,0"
+                                        Command="{Binding SerialConnection.RefreshPortsCommand}"
+                                        Content="刷新" />
+                                <Button Margin="0,0,6,0"
+                                        Command="{Binding SerialConnection.ResetDefaultsCommand}"
+                                        Content="默认" />
+                                <Button Margin="0,0,6,0"
+                                        Style="{StaticResource Button.Primary}"
+                                        Command="{Binding SerialConnection.ConnectCommand}"
+                                        Content="连接" />
+                                <Button Command="{Binding SerialConnection.DisconnectCommand}"
+                                        Content="断开" />
+                            </WrapPanel>
+                            <StackPanel Grid.Row="1"
+                                        Grid.ColumnSpan="8"
+                                        Margin="0,9,0,0">
+                                <TextBlock Foreground="{DynamicResource Brush.TextSecondary}"
+                                           Text="{Binding SerialConnection.PortDiscoveryStatus}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Margin="0,2,0,0"
+                                           Foreground="{DynamicResource Brush.Danger}"
+                                           Text="{Binding SerialConnection.ErrorMessage}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Expander>
+            </Grid>
+        </Grid>
+    </Border>
 </Window>

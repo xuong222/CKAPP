@@ -12,6 +12,11 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
     public sealed class PeriodicSendServiceTests
     {
         /// <summary>
+        /// 为并行测试进程的线程调度预留稳定上限，不改变被测定时发送的虚拟时间参数。
+        /// </summary>
+        private static readonly TimeSpan AsyncAssertionTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
         /// 验证仅连接或配置不会写串口，Start 后也必须先等待一个完整间隔。
         /// </summary>
         [Test]
@@ -116,7 +121,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
             }));
 
             await harness.Transport.InjectReceiveAsync(CreateReadResponse(0x0101));
-            await manualExecution.WaitAsync(TimeSpan.FromSeconds(1));
+            await manualExecution.WaitAsync(AsyncAssertionTimeout);
             harness.TimeProvider.Advance(TimeSpan.FromMilliseconds(99));
             Assert.That(harness.Transport.WrittenFrames, Has.Count.EqualTo(1));
             Task periodicWaitingResponse = WaitForCoordinatorStateAsync(
@@ -296,7 +301,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
                 }
             };
             coordinator.StateChanged += observer;
-            return completionSource.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            return completionSource.Task.WaitAsync(AsyncAssertionTimeout);
         }
 
         /// <summary>
@@ -321,7 +326,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
                 }
             };
             service.PhaseChanged += observer;
-            return completionSource.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            return completionSource.Task.WaitAsync(AsyncAssertionTimeout);
         }
 
         /// <summary>
@@ -341,7 +346,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
                 completionSource.TrySetResult(result);
             };
             service.AttemptCompleted += observer;
-            return completionSource.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            return completionSource.Task.WaitAsync(AsyncAssertionTimeout);
         }
 
         /// <summary>
@@ -378,7 +383,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
                 completionSource.TrySetResult();
             }
 
-            return completionSource.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            return completionSource.Task.WaitAsync(AsyncAssertionTimeout);
         }
 
         /// <summary>
@@ -403,7 +408,7 @@ namespace CH32UpperComputer.Infrastructure.Tests.Transactions
                 }
             };
             service.RunningChanged += observer;
-            return completionSource.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            return completionSource.Task.WaitAsync(AsyncAssertionTimeout);
         }
 
         /// <summary>

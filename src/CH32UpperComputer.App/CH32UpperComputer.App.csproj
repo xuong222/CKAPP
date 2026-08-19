@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <AssemblyName>CKAPP</AssemblyName>
+    <ApplicationIcon>Assets\CKAPP.ico</ApplicationIcon>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -23,6 +24,10 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\InkPlumReference.jpg" />
   </ItemGroup>
 
 </Project>

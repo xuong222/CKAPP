@@ -4,8 +4,12 @@
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="16" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Padding" Value="14" />
+    </Style>
+    <Style x:Key="Card.Console" TargetType="Border" BasedOn="{StaticResource Card}">
+        <Setter Property="Background" Value="{DynamicResource Brush.ConsoleGradient}" />
+        <Setter Property="BorderBrush" Value="#28434A" />
     </Style>
     <Style x:Key="Splitter.Industrial" TargetType="GridSplitter">
         <Setter Property="Background" Value="Transparent" />
@@ -304,7 +308,8 @@
         <Setter Property="Background" Value="{DynamicResource Brush.SurfaceRaised}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderStrong}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="14,7" />
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="13,7" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="Cursor" Value="Hand" />
@@ -315,15 +320,15 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="5"
+                            CornerRadius="7"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource Brush.SurfaceHover}" />
                             <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{DynamicResource Brush.Primary}" />
+                            <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.9" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.8" />
@@ -339,6 +344,7 @@
     <Style x:Key="Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="Background" Value="{DynamicResource Brush.Primary}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.PrimaryBright}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InverseText}" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Style.Triggers>
             <Trigger Property="IsEnabled" Value="False">
@@ -353,7 +359,9 @@
     </Style>
     <Style x:Key="Button.Danger" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.Danger}" />
-        <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.Danger}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InverseText}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style TargetType="TextBox">
         <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
@@ -548,8 +556,8 @@
     </Style>
     <Style TargetType="ProgressBar">
         <Setter Property="Height" Value="12" />
-        <Setter Property="Foreground" Value="{DynamicResource Brush.Normal}" />
-        <Setter Property="Background" Value="{DynamicResource Brush.Window}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.ProgressGradient}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.SurfaceRaised}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderStrong}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Template">
@@ -577,6 +585,138 @@
     <Style TargetType="TabControl">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style x:Key="TabControl.ContentOnly"
+           TargetType="TabControl"
+           BasedOn="{StaticResource {x:Type TabControl}}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <ContentPresenter x:Name="PART_SelectedContentHost"
+                                      Content="{TemplateBinding SelectedContent}"
+                                      ContentStringFormat="{TemplateBinding SelectedContentStringFormat}"
+                                      ContentTemplate="{TemplateBinding SelectedContentTemplate}"
+                                      KeyboardNavigation.DirectionalNavigation="Contained"
+                                      SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Navigation.ListBox" TargetType="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="SelectionMode" Value="Single" />
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <StackPanel IsItemsHost="True" />
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}">
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"
+                                        SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Navigation.Item" TargetType="ListBoxItem">
+        <Setter Property="Height" Value="68" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+        <Setter Property="Padding" Value="18,0" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="NavigationCard"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="12"
+                            Padding="{TemplateBinding Padding}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="NavigationThread"
+                                    Width="3"
+                                    Margin="-18,13,0,13"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource Brush.NavigationThread}"
+                                    CornerRadius="2"
+                                    Visibility="Collapsed" />
+                            <TextBlock x:Name="NavigationText"
+                                       VerticalAlignment="Center"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Brush.TextPrimary}"
+                                       Text="{TemplateBinding Content}">
+                                <TextBlock.RenderTransform>
+                                    <TranslateTransform x:Name="NavigationTextTranslate" />
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                            <TextBlock x:Name="NavigationChevron"
+                                       Grid.Column="1"
+                                       VerticalAlignment="Center"
+                                       FontSize="18"
+                                       Foreground="{DynamicResource Brush.TextSecondary}"
+                                       Opacity="0.74"
+                                       Text="›">
+                                <TextBlock.RenderTransform>
+                                    <TranslateTransform x:Name="NavigationChevronTranslate" />
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="NavigationCard"
+                                    Property="Background"
+                                    Value="#66FFFFFF" />
+                            <Setter TargetName="NavigationCard"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource Brush.Border}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Foreground"
+                                    Value="{DynamicResource Brush.InverseText}" />
+                            <Setter TargetName="NavigationCard"
+                                    Property="Background"
+                                    Value="Transparent" />
+                            <Setter TargetName="NavigationCard"
+                                    Property="BorderBrush"
+                                    Value="Transparent" />
+                            <Setter TargetName="NavigationThread"
+                                    Property="Visibility"
+                                    Value="Visible" />
+                            <Setter TargetName="NavigationText"
+                                    Property="Foreground"
+                                    Value="{DynamicResource Brush.InverseText}" />
+                            <Setter TargetName="NavigationChevron"
+                                    Property="Foreground"
+                                    Value="{DynamicResource Brush.InverseText}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
     <Style TargetType="TabItem">
         <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
@@ -620,6 +760,7 @@
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
         <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="RowHeaderWidth" Value="0" />
         <Setter Property="GridLinesVisibility" Value="Horizontal" />
         <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource Brush.Border}" />
         <Setter Property="RowBackground" Value="{DynamicResource Brush.Surface}" />
@@ -631,9 +772,9 @@
     <Style TargetType="DataGridColumnHeader">
         <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
-        <Setter Property="Background" Value="{DynamicResource Brush.SurfaceRaised}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderStrong}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InverseText}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.PrimaryBright}" />
+        <Setter Property="BorderBrush" Value="#668DA09B" />
         <Setter Property="BorderThickness" Value="0,0,1,1" />
         <Setter Property="Padding" Value="10,9" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -677,6 +818,37 @@
             <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}" />
                 <Setter Property="Background" Value="{DynamicResource Brush.SurfaceRaised}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <Style TargetType="GridViewColumnHeader">
+        <Setter Property="Height" Value="38" />
+        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InverseText}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.PrimaryBright}" />
+        <Setter Property="BorderBrush" Value="#668DA09B" />
+        <Setter Property="BorderThickness" Value="0,0,1,0" />
+    </Style>
+    <Style TargetType="ListViewItem">
+        <Setter Property="MinHeight" Value="38" />
+        <Setter Property="Padding" Value="7,5" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Brush.SurfaceHover}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="#DCE8E4" />
+                <Setter Property="Foreground" Value="{DynamicResource Brush.Primary}" />
             </Trigger>
         </Style.Triggers>
     </Style>

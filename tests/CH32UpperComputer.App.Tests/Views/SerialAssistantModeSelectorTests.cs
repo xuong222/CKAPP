@@ -1,10 +1,12 @@
-using System.Threading;
+﻿using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CH32UpperComputer.App.Tests.TestSupport;
+using CH32UpperComputer.App.ViewModels;
 using CH32UpperComputer.App.Views;
+using CH32UpperComputer.Infrastructure.Serial;
 using CH32UpperComputer.Infrastructure.Settings;
 
 namespace CH32UpperComputer.App.Tests.Views
@@ -63,6 +65,151 @@ namespace CH32UpperComputer.App.Tests.Views
                 window?.Close();
                 FlushDispatcher();
                 harness.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+        }
+
+        /// <summary>
+        /// 验证 TX 与 RX 双行消息使用不同方向色，且秒级标题和缩进正文实际进入 WPF 模板。
+        /// </summary>
+        [Test]
+        public async Task TrafficCanvas_TxAndRxUseDistinctDirectionBrushes()
+        {
+            EnsureApplicationResources();
+            AppViewModelHarness harness = AppViewModelHarness.Create();
+            Window? window = null;
+
+            try
+            {
+                SerialAssistantView view = new()
+                {
+                    DataContext = harness.SerialAssistant,
+                };
+                window = new Window
+                {
+                    Width = 1180,
+                    Height = 720,
+                    ShowInTaskbar = false,
+                    WindowStyle = WindowStyle.None,
+                    Content = view,
+                };
+                window.Show();
+                FlushDispatcher();
+                await harness.SerialAssistant.ConnectCommand.ExecuteAsync(null);
+                harness.SerialAssistant.ShowTimestamps = true;
+                harness.SerialAssistant.SendText = "1411";
+                await harness.SerialAssistant.SendCommand.ExecuteAsync(null);
+                long previousRevision = harness.SerialAssistantService
+                    .Statistics
+                    .StatisticsRevision;
+                TaskCompletionSource receiveProcessed = new(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                void HandleStatistics(SerialAssistantStatistics statistics)
+                {
+                    if (statistics.StatisticsRevision > previousRevision)
+                    {
+                        receiveProcessed.TrySetResult();
+                    }
+                }
+
+                harness.SerialAssistantService.StatisticsChanged += HandleStatistics;
+
+                try
+                {
+                    await harness.AssistantTransport.InjectReceiveAsync("reply"u8.ToArray());
+                    await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                }
+                finally
+                {
+                    harness.SerialAssistantService.StatisticsChanged -= HandleStatistics;
+                }
+
+                harness.TimeProvider.Advance(TimeSpan.FromMilliseconds(51));
+                await WaitUntilAsync(
+                    () => harness.SerialAssistant.TrafficRecords.Count == 2);
+                FlushDispatcher();
+                ListBox canvas = (ListBox)view.FindName("TrafficCanvasListBox");
+                canvas.UpdateLayout();
+                Border txRecord = CreateDirectionBorder(
+                    canvas,
+                    harness.SerialAssistant.TrafficRecords[0]);
+                Border rxRecord = CreateDirectionBorder(
+                    canvas,
+                    harness.SerialAssistant.TrafficRecords[1]);
+                TextBlock[] txText = FindVisualDescendants<TextBlock>(txRecord).ToArray();
+                TextBlock[] rxText = FindVisualDescendants<TextBlock>(rxRecord).ToArray();
+                SolidColorBrush txExpected = (SolidColorBrush)Application.Current.FindResource(
+                    "Brush.ConsoleTx");
+                SolidColorBrush rxExpected = (SolidColorBrush)Application.Current.FindResource(
+                    "Brush.ConsoleRx");
+
+                Assert.Multiple(
+                    (Action)(() =>
+                    {
+                        Assert.That(canvas.Items, Has.Count.EqualTo(2));
+                        Assert.That(txText[0].Text, Does.Match("^\\[\\d{2}:\\d{2}:\\d{2}\\]  TX$"));
+                        Assert.That(txText[1].Text, Is.EqualTo("1411"));
+                        Assert.That(rxText[0].Text, Does.Match("^\\[\\d{2}:\\d{2}:\\d{2}\\]  RX$"));
+                        Assert.That(rxText[1].Text, Is.EqualTo("reply"));
+                        Assert.That(
+                            ((SolidColorBrush)txRecord.BorderBrush).Color,
+                            Is.EqualTo(txExpected.Color));
+                        Assert.That(
+                            ((SolidColorBrush)rxRecord.BorderBrush).Color,
+                            Is.EqualTo(rxExpected.Color));
+                        Assert.That(txExpected.Color, Is.Not.EqualTo(rxExpected.Color));
+                    }));
+            }
+            finally
+            {
+                window?.Close();
+                FlushDispatcher();
+                await harness.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// 从生产 DataTemplate 创建一项承担 TX/RX 方向色的消息边框。
+        /// </summary>
+        /// <param name="canvas">提供生产消息模板的串口画布列表。</param>
+        /// <param name="record">需要应用到模板的 TX 或 RX 显示记录。</param>
+        /// <returns>绑定方向画刷的消息边框。</returns>
+        private static Border CreateDirectionBorder(
+            ListBox canvas,
+            SerialAssistantTrafficDisplayRecord record)
+        {
+            ArgumentNullException.ThrowIfNull(canvas);
+            ArgumentNullException.ThrowIfNull(record);
+            Border? border = canvas.ItemTemplate.LoadContent() as Border;
+
+            if (border is null)
+            {
+                throw new InvalidOperationException(
+                    "串口画布生产 DataTemplate 的根元素不是消息 Border。");
+            }
+
+            border.DataContext = record;
+            border.Measure(new Size(900d, 200d));
+            border.Arrange(new Rect(border.DesiredSize));
+            border.UpdateLayout();
+            FlushDispatcher();
+            return border;
+        }
+
+        /// <summary>
+        /// 在短真实超时内等待后台收发记录到达界面集合。
+        /// </summary>
+        /// <param name="condition">记录准备完成时返回真的线程安全条件。</param>
+        /// <returns>条件满足后的任务。</returns>
+        private static async Task WaitUntilAsync(Func<bool> condition)
+        {
+            ArgumentNullException.ThrowIfNull(condition);
+            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
+
+            while (!condition())
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Delay(1, timeout.Token);
             }
         }
 

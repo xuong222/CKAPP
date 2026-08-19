@@ -6,7 +6,7 @@
              mc:Ignorable="d"
              d:DesignHeight="760"
              d:DesignWidth="1380">
-    <Grid Margin="0,10,0,0">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -14,34 +14,43 @@
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Style="{StaticResource Card}" Padding="12">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="220" />
-                    <ColumnDefinition Width="130" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <CheckBox Grid.Column="0" Margin="0,0,12,0" Content="TX" IsChecked="{Binding ShowTransmit}" />
-                <CheckBox Grid.Column="1" Margin="0,0,12,0" Content="RX" IsChecked="{Binding ShowReceive}" />
-                <CheckBox Grid.Column="2" Margin="0,0,12,0" Content="Error" IsChecked="{Binding ShowError}" />
-                <CheckBox Grid.Column="3" Margin="0,0,12,0" Content="Late" IsChecked="{Binding ShowLate}" />
-                <CheckBox Grid.Column="4" Margin="0,0,16,0" Content="System" IsChecked="{Binding ShowSystem}" />
-                <TextBox Grid.Column="5"
-                         Margin="0,0,8,0"
-                         ToolTip="摘要或原始十六进制关键字"
-                         Text="{Binding Keyword, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBox Grid.Column="6"
-                         Margin="0,0,8,0"
-                         ToolTip="事务编号"
-                         Text="{Binding TransactionIdText, UpdateSourceTrigger=PropertyChanged}" />
-                <Button Grid.Column="8"
-                        Margin="8,0,0,0"
-                        Command="{Binding ApplyFilterCommand}"
-                        Content="应用筛选" />
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock FontSize="17"
+                           FontWeight="SemiBold"
+                           Text="通信日志" />
+                <Grid Grid.Row="1" Margin="0,9,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="220" />
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Margin="0,0,12,0" Content="TX" IsChecked="{Binding ShowTransmit}" />
+                    <CheckBox Grid.Column="1" Margin="0,0,12,0" Content="RX" IsChecked="{Binding ShowReceive}" />
+                    <CheckBox Grid.Column="2" Margin="0,0,12,0" Content="Error" IsChecked="{Binding ShowError}" />
+                    <CheckBox Grid.Column="3" Margin="0,0,12,0" Content="Late" IsChecked="{Binding ShowLate}" />
+                    <CheckBox Grid.Column="4" Margin="0,0,16,0" Content="System" IsChecked="{Binding ShowSystem}" />
+                    <TextBox Grid.Column="5"
+                             Margin="0,0,8,0"
+                             ToolTip="摘要或原始十六进制关键字"
+                             Text="{Binding Keyword, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox Grid.Column="6"
+                             Margin="0,0,8,0"
+                             ToolTip="事务编号"
+                             Text="{Binding TransactionIdText, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Grid.Column="8"
+                            Margin="8,0,0,0"
+                            Command="{Binding ApplyFilterCommand}"
+                            Content="应用筛选" />
+                </Grid>
             </Grid>
         </Border>
 

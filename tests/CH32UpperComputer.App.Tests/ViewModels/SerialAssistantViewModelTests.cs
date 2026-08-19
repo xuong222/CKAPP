@@ -1,4 +1,4 @@
-using System.IO.Ports;
+﻿using System.IO.Ports;
 using System.IO;
 using System.Text;
 using CH32UpperComputer.App.Tests.TestSupport;
@@ -15,6 +15,12 @@ namespace CH32UpperComputer.App.Tests.ViewModels
     [TestFixture]
     public sealed class SerialAssistantViewModelTests
     {
+        /// <summary>
+        /// 为后台登记 50 毫秒合批计时器预留一毫秒调度裕量，避免虚拟时钟推进竞态。
+        /// </summary>
+        private static readonly TimeSpan ReceiveWindowWithSchedulingMargin =
+            SerialAssistantSessionService.ReceiveBatchWindow + TimeSpan.FromMilliseconds(1);
+
         /// <summary>
         /// 验证 HEX 输入不会追加 CRC，且“发送新行”只追加 CRLF 字节。
         /// </summary>
@@ -72,15 +78,16 @@ namespace CH32UpperComputer.App.Tests.ViewModels
             await harness.ConnectAsync();
 
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xE4, 0xB8 });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
             await harness.WaitUntilAsync(() => harness.Service.CreateReceiveSnapshot().Count == 1);
             Assert.That(harness.ViewModel.ReceiveText, Is.Empty);
 
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xAD });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
-            await harness.WaitUntilAsync(() => harness.ViewModel.ReceiveText == "中");
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText == "RX\r\n     中\r\n\r\n");
 
-            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("中"));
+            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("RX\r\n     中\r\n\r\n"));
         }
 
         /// <summary>
@@ -92,12 +99,15 @@ namespace CH32UpperComputer.App.Tests.ViewModels
             using AssistantHarness harness = AssistantHarness.Create();
             await harness.ConnectAsync();
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xE4, 0xB8, 0xAD });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
-            await harness.WaitUntilAsync(() => harness.ViewModel.ReceiveText == "中");
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText == "RX\r\n     中\r\n\r\n");
 
             harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Hex;
 
-            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("E4 B8 AD\r\n"));
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Is.EqualTo("RX\r\n     E4 B8 AD\r\n\r\n"));
         }
 
         /// <summary>
@@ -134,7 +144,7 @@ namespace CH32UpperComputer.App.Tests.ViewModels
                 };
                 await transport.InjectReceiveAsync(new byte[] { 0x41 });
                 await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
-                timeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+                timeProvider.Advance(ReceiveWindowWithSchedulingMargin);
                 await WaitUntilAsync(() => service.CreateReceiveSnapshot().Count == 1);
 
                 viewModel.ClearCommand.Execute(null);
@@ -148,6 +158,118 @@ namespace CH32UpperComputer.App.Tests.ViewModels
                 viewModel.Dispose();
                 await service.DisposeAsync();
             }
+        }
+
+        /// <summary>
+        /// 验证发送成功和随后收到的数据会按发生顺序同时出现在统一串口画布中。
+        /// </summary>
+        [Test]
+        public async Task TrafficCanvas_AfterManualSendAndReceive_ShowsTxAndRx()
+        {
+            using AssistantHarness harness = AssistantHarness.Create();
+            await harness.ConnectAsync();
+            harness.ViewModel.SendMode = SerialAssistantDataMode.Utf8;
+            harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Utf8;
+            harness.ViewModel.SendText = "ping";
+
+            await harness.ViewModel.SendCommand.ExecuteAsync(null);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText.Contains(
+                    "TX\r\n     ping\r\n\r\n",
+                    StringComparison.Ordinal));
+            await harness.InjectReceiveAndWaitForStatisticsAsync(
+                Encoding.UTF8.GetBytes("pong"));
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText.Contains(
+                    "RX\r\n     pong\r\n\r\n",
+                    StringComparison.Ordinal));
+
+            Assert.Multiple(
+                (Action)(() =>
+                {
+                    Assert.That(
+                        harness.ViewModel.ReceiveText,
+                        Is.EqualTo("TX\r\n     ping\r\n\r\nRX\r\n     pong\r\n\r\n"));
+                    Assert.That(harness.ViewModel.TrafficRecords, Has.Count.EqualTo(2));
+                    Assert.That(harness.ViewModel.TrafficRecords[0].HeaderText, Is.EqualTo("TX"));
+                    Assert.That(harness.ViewModel.TrafficRecords[0].IsTransmit, Is.True);
+                    Assert.That(harness.ViewModel.TrafficRecords[1].HeaderText, Is.EqualTo("RX"));
+                    Assert.That(harness.ViewModel.TrafficRecords[1].IsTransmit, Is.False);
+                }));
+        }
+
+        /// <summary>
+        /// 验证开启时间戳后使用秒级标题行，并把 TX 数据放在下一条缩进正文行中。
+        /// </summary>
+        [Test]
+        public async Task TrafficCanvas_WithTimestamp_UsesTwoLineMessageLayout()
+        {
+            using AssistantHarness harness = AssistantHarness.Create();
+            await harness.ConnectAsync();
+            harness.ViewModel.ShowTimestamps = true;
+            harness.ViewModel.SendText = "1411";
+
+            await harness.ViewModel.SendCommand.ExecuteAsync(null);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText.Contains(
+                    "TX",
+                    StringComparison.Ordinal));
+
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Does.Match("^\\[\\d{2}:\\d{2}:\\d{2}\\]  TX\\r\\n     1411\\r\\n\\r\\n$"));
+        }
+
+        /// <summary>
+        /// 验证切换统一画布到 HEX 模式时，会从原始 TX/RX 快照完整重绘且不丢失发送记录。
+        /// </summary>
+        [Test]
+        public async Task TrafficCanvas_WhenDisplayModeChanges_PreservesTxAndRxHistory()
+        {
+            using AssistantHarness harness = AssistantHarness.Create();
+            await harness.ConnectAsync();
+            harness.ViewModel.SendText = "A";
+            await harness.ViewModel.SendCommand.ExecuteAsync(null);
+            await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0x42 });
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText ==
+                    "TX\r\n     A\r\n\r\nRX\r\n     B\r\n\r\n");
+
+            harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Hex;
+
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Is.EqualTo("TX\r\n     41\r\n\r\nRX\r\n     42\r\n\r\n"));
+        }
+
+        /// <summary>
+        /// 验证定时循环每次真实写入成功后也会把冻结负载追加为一项 TX 画布记录。
+        /// </summary>
+        [Test]
+        public async Task TrafficCanvas_AfterPeriodicWrite_ShowsTxRecord()
+        {
+            using AssistantHarness harness = AssistantHarness.Create();
+            await harness.ConnectAsync();
+            harness.ViewModel.SendText = "tick";
+            harness.ViewModel.PeriodicIntervalMilliseconds = 1000;
+            harness.ViewModel.StartPeriodicCommand.Execute(null);
+
+            harness.TimeProvider.Advance(TimeSpan.FromMilliseconds(1001));
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText == "TX\r\n     tick\r\n\r\n");
+            await harness.ViewModel.StopPeriodicCommand.ExecuteAsync(null);
+
+            Assert.Multiple(
+                (Action)(() =>
+                {
+                    Assert.That(
+                        harness.ViewModel.ReceiveText,
+                        Is.EqualTo("TX\r\n     tick\r\n\r\n"));
+                    Assert.That(harness.ViewModel.TransmitOperationCount, Is.EqualTo(1));
+                    Assert.That(harness.ViewModel.TransmitBytes, Is.EqualTo(4));
+                }));
         }
 
         /// <summary>
@@ -216,9 +338,10 @@ namespace CH32UpperComputer.App.Tests.ViewModels
                 await harness.ConnectAsync();
                 harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Hex;
                 await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0x41, 0x0D, 0x0A });
-                harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+                harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
                 await harness.WaitUntilAsync(
-                    () => harness.ViewModel.ReceiveText == "41 0D 0A\r\n");
+                    () => harness.ViewModel.ReceiveText ==
+                        "RX\r\n     41 0D 0A\r\n\r\n");
 
                 await harness.ViewModel.SaveCurrentViewAsync(filePath, CancellationToken.None);
 
@@ -228,7 +351,9 @@ namespace CH32UpperComputer.App.Tests.ViewModels
                     (Action)(() =>
                     {
                         Assert.That(bytes.Take(3), Is.EqualTo(new byte[] { 0xEF, 0xBB, 0xBF }));
-                        Assert.That(content, Is.EqualTo("41 0D 0A\r\n"));
+                        Assert.That(
+                            content,
+                            Is.EqualTo("RX\r\n     41 0D 0A\r\n\r\n"));
                         Assert.That(harness.ViewModel.SaveDirectory, Is.EqualTo(directory));
                     }));
             }
@@ -248,10 +373,13 @@ namespace CH32UpperComputer.App.Tests.ViewModels
             await harness.ConnectAsync();
 
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xFF });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
-            await harness.WaitUntilAsync(() => harness.ViewModel.ReceiveText.Length == 1);
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
+            await harness.WaitUntilAsync(
+                () => harness.ViewModel.ReceiveText == "RX\r\n     �\r\n\r\n");
 
-            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("�"));
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Is.EqualTo("RX\r\n     �\r\n\r\n"));
         }
 
         /// <summary>
@@ -263,14 +391,16 @@ namespace CH32UpperComputer.App.Tests.ViewModels
             using AssistantHarness harness = AssistantHarness.Create();
             await harness.ConnectAsync();
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xE4, 0xB8 });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
             await harness.WaitUntilAsync(() => harness.Service.CreateReceiveSnapshot().Count == 1);
 
             await harness.ViewModel.DisconnectCommand.ExecuteAsync(null);
             harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Hex;
             harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Utf8;
 
-            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("�"));
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Is.EqualTo("RX\r\n     �\r\n\r\n"));
         }
 
         /// <summary>
@@ -282,18 +412,20 @@ namespace CH32UpperComputer.App.Tests.ViewModels
             using AssistantHarness harness = AssistantHarness.Create();
             await harness.ConnectAsync();
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xE4, 0xB8 });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
             await harness.WaitUntilAsync(() => harness.Service.CreateReceiveSnapshot().Count == 1);
             await harness.ViewModel.DisconnectCommand.ExecuteAsync(null);
             await harness.ConnectAsync();
             await harness.InjectReceiveAndWaitForStatisticsAsync(new byte[] { 0xAD });
-            harness.TimeProvider.Advance(SerialAssistantSessionService.ReceiveBatchWindow);
+            harness.TimeProvider.Advance(ReceiveWindowWithSchedulingMargin);
             await harness.WaitUntilAsync(() => harness.Service.CreateReceiveSnapshot().Count == 2);
 
             harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Hex;
             harness.ViewModel.ReceiveMode = SerialAssistantDataMode.Utf8;
 
-            Assert.That(harness.ViewModel.ReceiveText, Is.EqualTo("��"));
+            Assert.That(
+                harness.ViewModel.ReceiveText,
+                Is.EqualTo("RX\r\n     �\r\n\r\nRX\r\n     �\r\n\r\n"));
         }
 
         /// <summary>

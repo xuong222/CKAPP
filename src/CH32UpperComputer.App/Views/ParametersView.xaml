@@ -1,4 +1,4 @@
-<UserControl x:Class="CH32UpperComputer.App.Views.ParametersView"
+﻿<UserControl x:Class="CH32UpperComputer.App.Views.ParametersView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -89,8 +89,8 @@
                         <Border x:Name="HitArea"
                                 Background="{TemplateBinding Background}"
                                 CornerRadius="4">
-                            <Grid Width="20"
-                                  Height="20"
+                            <Grid Width="22"
+                                  Height="22"
                                   HorizontalAlignment="Center"
                                   VerticalAlignment="Center">
                                 <Border x:Name="CheckBoxBody"
@@ -186,7 +186,7 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid Margin="0,10,0,0">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -195,8 +195,6 @@
 
         <Border Grid.Row="0"
                 Style="{StaticResource Card}"
-                Background="{DynamicResource Brush.SurfaceRaised}"
-                BorderBrush="{DynamicResource Brush.Primary}"
                 Padding="14">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -250,7 +248,7 @@
                   FrozenColumnCount="3"
                   IsReadOnly="False"
                   ItemsSource="{Binding Registers}"
-                  MinRowHeight="46"
+                  MinRowHeight="48"
                   RowStyle="{StaticResource ParameterGrid.Row}"
                   AlternationCount="2"
                   EnableRowVirtualization="False"
@@ -259,7 +257,7 @@
                   ScrollViewer.VerticalScrollBarVisibility="Auto"
                   VirtualizingPanel.IsVirtualizing="False">
             <DataGrid.Columns>
-                <DataGridTemplateColumn Width="68" Header="选择">
+                <DataGridTemplateColumn Width="76" Header="选择">
                     <DataGridTemplateColumn.CellStyle>
                         <Style TargetType="DataGridCell"
                                BasedOn="{StaticResource ParameterGrid.Cell}">

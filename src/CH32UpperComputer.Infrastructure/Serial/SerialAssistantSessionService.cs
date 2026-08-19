@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Threading.Channels;
 
 namespace CH32UpperComputer.Infrastructure.Serial
@@ -69,6 +69,16 @@ namespace CH32UpperComputer.Infrastructure.Serial
         private int receiveCacheBytes;
 
         /// <summary>
+        /// 按实际发生顺序保存、总量不超过 512 KiB 的统一 TX/RX 画布记录。
+        /// </summary>
+        private readonly LinkedList<SerialAssistantTrafficBatch> trafficCache = [];
+
+        /// <summary>
+        /// 当前统一 TX/RX 画布缓存占用的原始字节数。
+        /// </summary>
+        private int trafficCacheBytes;
+
+        /// <summary>
         /// 成功完成的发送操作次数。
         /// </summary>
         private long transmitOperationCount;
@@ -102,6 +112,11 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// 每次缓存写入或清空递增，用于界面识别重复、迟到和跳号更新。
         /// </summary>
         private long cacheRevision;
+
+        /// <summary>
+        /// 每次统一 TX/RX 缓存写入或清空递增，用于画布拒绝重复和迟到更新。
+        /// </summary>
+        private long trafficRevision;
 
         /// <summary>
         /// 每次任一统计计数改变时递增，用于界面拒绝并发发布产生的迟到统计。
@@ -172,6 +187,11 @@ namespace CH32UpperComputer.Infrastructure.Serial
         /// 在新接收批次写入原始缓存后发布增量或完整重绘提示。
         /// </summary>
         public event Action<SerialAssistantReceiveUpdate>? ReceiveUpdated;
+
+        /// <summary>
+        /// 在成功发送或新接收批次进入统一画布缓存后发布增量刷新提示。
+        /// </summary>
+        public event Action<SerialAssistantTrafficUpdate>? TrafficUpdated;
 
         /// <summary>
         /// 在收发或丢弃计数变化时发布最新统计快照。
@@ -527,6 +547,8 @@ namespace CH32UpperComputer.Infrastructure.Serial
             {
                 receiveCache.Clear();
                 receiveCacheBytes = 0;
+                trafficCache.Clear();
+                trafficCacheBytes = 0;
                 transmitOperationCount = 0;
                 transmitBytes = 0;
                 receiveBytes = 0;
@@ -534,6 +556,7 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 pausedDiscardedBytes = 0;
                 clearVersion = checked(clearVersion + 1);
                 cacheRevision = checked(cacheRevision + 1);
+                trafficRevision = checked(trafficRevision + 1);
                 statisticsRevision = checked(statisticsRevision + 1);
                 statistics = CreateStatisticsUnderLock();
                 snapshot = CreateReceiveSnapshotUnderLock();
@@ -561,6 +584,18 @@ namespace CH32UpperComputer.Infrastructure.Serial
             lock (cacheSyncRoot)
             {
                 return CreateReceiveSnapshotUnderLock();
+            }
+        }
+
+        /// <summary>
+        /// 原子创建用于统一串口画布完整重绘的 TX/RX 缓存及排序版本快照。
+        /// </summary>
+        /// <returns>记录、清空代次和修订号均来自同一缓存锁临界区的不可变快照。</returns>
+        public SerialAssistantTrafficSnapshot CreateTrafficSnapshotState()
+        {
+            lock (cacheSyncRoot)
+            {
+                return CreateTrafficSnapshotUnderLock();
             }
         }
 
@@ -967,10 +1002,17 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 buffer.AsSpan(0, bufferedBytes),
                 arrivedAtUtc,
                 portGeneration);
+            SerialAssistantTrafficBatch trafficBatch = new(
+                SerialAssistantTrafficDirection.Receive,
+                buffer.AsSpan(0, bufferedBytes),
+                arrivedAtUtc,
+                portGeneration);
             bufferedBytes = 0;
             bool evicted = false;
+            bool trafficEvicted;
             SerialAssistantStatistics? statistics = null;
             long publishedCacheRevision;
+            long publishedTrafficRevision;
 
             lock (cacheSyncRoot)
             {
@@ -992,6 +1034,10 @@ namespace CH32UpperComputer.Infrastructure.Serial
                 receiveCacheBytes += batch.ByteCount;
                 cacheRevision = checked(cacheRevision + 1);
                 publishedCacheRevision = cacheRevision;
+                CacheTrafficBatchUnderLock(
+                    trafficBatch,
+                    out trafficEvicted,
+                    out publishedTrafficRevision);
 
                 if (evicted)
                 {
@@ -1006,6 +1052,12 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     evicted,
                     batchClearVersion,
                     publishedCacheRevision));
+            PublishTrafficUpdated(
+                new SerialAssistantTrafficUpdate(
+                    trafficBatch,
+                    trafficEvicted,
+                    batchClearVersion,
+                    publishedTrafficRevision));
 
             if (statistics is not null)
             {
@@ -1070,7 +1122,15 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     throw new InvalidOperationException("发送前串口会话已经失效，未写入任何数据。");
                 }
 
+                SerialAssistantTrafficBatch trafficBatch = new(
+                    SerialAssistantTrafficDirection.Transmit,
+                    payload.Span,
+                    timeProvider.GetUtcNow(),
+                    expectedGeneration);
                 SerialAssistantStatistics statistics;
+                bool trafficEvicted;
+                long trafficClearVersion;
+                long publishedTrafficRevision;
 
                 lock (cacheSyncRoot)
                 {
@@ -1078,9 +1138,20 @@ namespace CH32UpperComputer.Infrastructure.Serial
                     transmitBytes = checked(transmitBytes + payload.Length);
                     statisticsRevision = checked(statisticsRevision + 1);
                     statistics = CreateStatisticsUnderLock();
+                    trafficClearVersion = clearVersion;
+                    CacheTrafficBatchUnderLock(
+                        trafficBatch,
+                        out trafficEvicted,
+                        out publishedTrafficRevision);
                 }
 
                 PublishStatisticsChanged(statistics);
+                PublishTrafficUpdated(
+                    new SerialAssistantTrafficUpdate(
+                        trafficBatch,
+                        trafficEvicted,
+                        trafficClearVersion,
+                        publishedTrafficRevision));
             }
             finally
             {
@@ -1184,6 +1255,54 @@ namespace CH32UpperComputer.Infrastructure.Serial
         }
 
         /// <summary>
+        /// 在调用方持有缓存锁时写入一项统一收发记录，并按最旧完整记录执行容量淘汰。
+        /// </summary>
+        /// <param name="batch">需要追加到统一画布缓存的非空 TX 或 RX 记录。</param>
+        /// <param name="evicted">返回本次写入是否淘汰了至少一项旧记录。</param>
+        /// <param name="publishedTrafficRevision">返回本次写入后的统一缓存修订号。</param>
+        private void CacheTrafficBatchUnderLock(
+            SerialAssistantTrafficBatch batch,
+            out bool evicted,
+            out long publishedTrafficRevision)
+        {
+            ArgumentNullException.ThrowIfNull(batch);
+            evicted = false;
+
+            while (trafficCacheBytes + batch.ByteCount > ReceiveCacheCapacityBytes)
+            {
+                SerialAssistantTrafficBatch oldest = trafficCache.First!.Value;
+                trafficCache.RemoveFirst();
+                trafficCacheBytes -= oldest.ByteCount;
+                evicted = true;
+            }
+
+            trafficCache.AddLast(batch);
+            trafficCacheBytes += batch.ByteCount;
+            trafficRevision = checked(trafficRevision + 1);
+            publishedTrafficRevision = trafficRevision;
+        }
+
+        /// <summary>
+        /// 在调用方持有缓存锁时复制统一 TX/RX 缓存和同一时刻的排序版本。
+        /// </summary>
+        /// <returns>不与内部缓存共享数组的统一串口画布快照。</returns>
+        private SerialAssistantTrafficSnapshot CreateTrafficSnapshotUnderLock()
+        {
+            SerialAssistantTrafficBatch[] batches = trafficCache
+                .Select(
+                    batch => new SerialAssistantTrafficBatch(
+                        batch.Direction,
+                        batch.Data.Span,
+                        batch.RecordedAtUtc,
+                        batch.PortGeneration))
+                .ToArray();
+            return new SerialAssistantTrafficSnapshot(
+                batches,
+                clearVersion,
+                trafficRevision);
+        }
+
+        /// <summary>
         /// 获取当前清空代次以隔离清空前的尚未发布合并缓冲。
         /// </summary>
         /// <returns>当前单调递增的清空代次。</returns>
@@ -1276,6 +1395,15 @@ namespace CH32UpperComputer.Infrastructure.Serial
         private void PublishReceiveUpdated(SerialAssistantReceiveUpdate update)
         {
             PublishObservers(ReceiveUpdated, update);
+        }
+
+        /// <summary>
+        /// 隔离观察者异常后发布统一 TX/RX 画布缓存更新。
+        /// </summary>
+        /// <param name="update">新收发记录、淘汰标记及排序版本。</param>
+        private void PublishTrafficUpdated(SerialAssistantTrafficUpdate update)
+        {
+            PublishObservers(TrafficUpdated, update);
         }
 
         /// <summary>
